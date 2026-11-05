@@ -9,19 +9,23 @@ import (
 )
 
 type Config struct {
-	PublicURL    string `yaml:"public_url" json:"public_url"`
-	Listen       string `yaml:"listen" json:"listen"`
-	PasswordHash string `yaml:"password_hash" json:"-"`
-	Broadcast    string `yaml:"broadcast" json:"broadcast"`
-	Port         int    `yaml:"port" json:"port"`
-	Repeat       int    `yaml:"repeat" json:"repeat"`
-	LogLimit     int    `yaml:"log_limit" json:"log_limit"`
+	TrustedProxies []string `yaml:"trusted_proxies" json:"-"`
+	PublicURL      string   `yaml:"public_url" json:"public_url"`
+	Listen         string   `yaml:"listen" json:"listen"`
+	PasswordHash   string   `yaml:"password_hash" json:"-"`
+	Broadcast      string   `yaml:"broadcast" json:"broadcast"`
+	Port           int      `yaml:"port" json:"port"`
+	Repeat         int      `yaml:"repeat" json:"repeat"`
+	LogLimit       int      `yaml:"log_limit" json:"log_limit"`
 }
 
 func DefaultConfig() Config {
 	return Config{Listen: "127.0.0.1:8080", Broadcast: "255.255.255.255", Port: 9, Repeat: 3, LogLimit: 100}
 }
 func (c Config) Validate() error {
+	if _, err := parseTrustedProxies(c.TrustedProxies); err != nil {
+		return err
+	}
 	if c.PublicURL != "" {
 		u, e := url.Parse(c.PublicURL)
 		if e != nil || u.Host == "" || u.User != nil || (u.Scheme != "http" && u.Scheme != "https") || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {

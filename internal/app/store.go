@@ -96,8 +96,14 @@ func OpenStore(dir string) (s *Store, err error) {
 	err = nil
 	return s, nil
 }
-func (s *Store) Close() error   { return os.Remove(filepath.Join(s.dir, ".lock")) }
-func (s *Store) Config() Config { s.mu.RLock(); defer s.mu.RUnlock(); return s.config }
+func (s *Store) Close() error { return os.Remove(filepath.Join(s.dir, ".lock")) }
+func (s *Store) Config() Config {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	c := s.config
+	c.TrustedProxies = append([]string(nil), c.TrustedProxies...)
+	return c
+}
 func (s *Store) Devices() []Device {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -167,6 +173,8 @@ func (s *Store) SaveConfig(c Config) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c.PasswordHash = s.config.PasswordHash
+	// Proxy trust is an administrator-only YAML setting, absent from the web API.
+	c.TrustedProxies = append([]string(nil), s.config.TrustedProxies...)
 	return s.saveConfig(c)
 }
 func (s *Store) saveConfig(c Config) error {

@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,12 +29,17 @@ type session struct {
 	expires time.Time
 }
 type Server struct {
-	store                *Store
-	setupToken           string
-	mu                   sync.Mutex
-	sessions             map[string]session
-	authStart, wakeStart time.Time
-	authCount, wakeCount int
+	store          *Store
+	setupToken     string
+	mu             sync.Mutex
+	sessions       map[string]session
+	wakeStart      time.Time
+	wakeCount      int
+	setupMu        sync.Mutex
+	loginLimit     *sourceLimiter
+	setupLimit     *sourceLimiter
+	passwordWork   chan struct{}
+	trustedProxies []netip.Prefix
 }
 
 func randomToken() string {
@@ -44,7 +50,13 @@ func randomToken() string {
 	return hex.EncodeToString(b)
 }
 func NewServer(s *Store) *Server {
-	return &Server{store: s, setupToken: randomToken(), sessions: map[string]session{}}
+	// OpenStore validates these entries. Proxy trust is fixed until restart.
+	proxies, _ := parseTrustedProxies(s.Config().TrustedProxies)
+	return &Server{
+		store: s, setupToken: randomToken(), sessions: map[string]session{},
+		loginLimit: newSourceLimiter(10), setupLimit: newSourceLimiter(5),
+		passwordWork: make(chan struct{}, 2), trustedProxies: proxies,
+	}
 }
 func (s *Server) SetupToken() string { return s.setupToken }
 func (s *Server) Handler() http.Handler {
@@ -182,13 +194,10 @@ func (s *Server) sessionInfo(w http.ResponseWriter, r *http.Request) {
 	v, ok := s.getSession(r)
 	respond(w, 200, map[string]any{"authenticated": ok, "setup_required": s.store.Config().PasswordHash == "", "csrf": v.csrf})
 }
-func (s *Server) allow(auth bool) bool {
+func (s *Server) allowWake() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	start, count, limit := &s.wakeStart, &s.wakeCount, 60
-	if auth {
-		start, count, limit = &s.authStart, &s.authCount, 10
-	}
 	if time.Since(*start) >= time.Minute {
 		*start = time.Now()
 		*count = 0
@@ -199,8 +208,8 @@ func (s *Server) allow(auth bool) bool {
 	*count++
 	return true
 }
-func (s *Server) rate(w http.ResponseWriter, auth bool) bool {
-	if s.allow(auth) {
+func (s *Server) wakeRate(w http.ResponseWriter) bool {
+	if s.allowWake() {
 		return true
 	}
 	w.Header().Set("Retry-After", "60")
@@ -208,11 +217,11 @@ func (s *Server) rate(w http.ResponseWriter, auth bool) bool {
 	return false
 }
 func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
-	if !s.rate(w, true) {
-		return
-	}
 	if s.store.Config().PasswordHash != "" {
 		apiError(w, 409, errors.New("管理员已初始化"))
+		return
+	}
+	if !s.authRate(w, r, s.setupLimit) {
 		return
 	}
 	var input struct {
@@ -227,20 +236,27 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Serialize setup attempts so two first-use requests cannot replace each other.
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	if !s.setupMu.TryLock() {
+		passwordBusy(w)
+		return
+	}
+	defer s.setupMu.Unlock()
 	if s.store.Config().PasswordHash != "" {
 		apiError(w, 409, errors.New("管理员已初始化"))
 		return
 	}
-	if e := s.store.SetPassword(input.Password); e != nil {
+	e, admitted := s.runPasswordWork(w, func() error { return s.store.SetPassword(input.Password) })
+	if !admitted {
+		return
+	}
+	if e != nil {
 		apiError(w, 400, e)
 		return
 	}
 	respond(w, 200, map[string]string{"message": "密码已设置，请登录"})
 }
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
-	if !s.rate(w, true) {
+	if !s.authRate(w, r, s.loginLimit) {
 		return
 	}
 	var input struct {
@@ -254,7 +270,13 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		apiError(w, 409, errors.New("请先初始化管理员"))
 		return
 	}
-	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(input.Password)) != nil {
+	e, admitted := s.runPasswordWork(w, func() error {
+		return bcrypt.CompareHashAndPassword([]byte(hash), []byte(input.Password))
+	})
+	if !admitted {
+		return
+	}
+	if e != nil {
 		apiError(w, 401, errors.New("密码错误"))
 		return
 	}
@@ -335,7 +357,7 @@ func (s *Server) wake(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !s.rate(w, false) {
+	if !s.wakeRate(w) {
 		return
 	}
 	e := Wake(r.Context(), d)
@@ -359,7 +381,7 @@ func (s *Server) probe(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !s.rate(w, false) {
+	if !s.wakeRate(w) {
 		return
 	}
 	online, e := Probe(r.Context(), d)
