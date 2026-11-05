@@ -419,6 +419,8 @@ main() {
     fi
     say '默认仅监听 127.0.0.1:8080。可显式配置 LAN 监听后通过浏览器初始化；安装器不会修改防火墙。'
     if [ "$SERVICE" != none ]; then say "服务类型：$SERVICE；服务文件：$SERVICE_FILE"; fi
+    say '卸载脚本：https://raw.githubusercontent.com/lemoeo/Shell-WoL/main/scripts/uninstall.sh'
+    say "预览卸载：sh uninstall.sh --install-dir \"$ROOT\" --dry-run（用户安装加 --user）"
 }
 
 if [ "${SHELL_WOL_INSTALL_LIBRARY:-0}" != 1 ]; then main "$@"; fi

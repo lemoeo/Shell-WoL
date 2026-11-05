@@ -81,6 +81,17 @@ logread -e shell-wol
 
 以前手动部署的 `/usr/bin/shell-wol` 和 `/etc/shell-wol/*.yaml` 没有安装元数据，不会被自动覆盖。先停止旧服务、备份程序与数据，使用新的空根目录安装；在服务停止时把 YAML 迁移到新根目录的 `data/`。如果沿用旧服务名称，先备份旧服务文件并人工迁移，安装器拒绝覆盖不属于它的服务。原数据确认可用前不要删除旧目录。
 
+## 卸载
+
+从仓库下载 `scripts/uninstall.sh`，先预览，再以 root 执行。以标准 OpenWrt 为例：
+
+```sh
+sh uninstall.sh --install-dir /etc/shell-wol --dry-run
+sh uninstall.sh --install-dir /etc/shell-wol
+```
+
+小米兼容固件的默认根目录是 `/data/shell-wol`，外置存储使用实际安装路径。默认停止并禁用 procd 服务、移除程序，保留数据。只有显式指定 `--purge` 才删除已知 YAML 和文件日志；未知文件、系统日志及账户保留。卸载不比较服务文件摘要；服务路径不属于本安装、运行锁遗留或仍有手动运行进程时中止，不自动杀进程或删锁。完整范围见 [卸载与重新安装](install.md#卸载与重新安装)。
+
 ## 兼容性验证与排查
 
 当前已完成 Linux 开发环境中的功能测试及所列目标的交叉编译。OpenWrt/二次开发固件的启动、真实 LAN 广播、关机唤醒和服务重启仍需在对应型号与固件上验证，不能仅凭构建成功声明实机兼容。

@@ -36,6 +36,17 @@ sh install.sh --user --yes
 
 安装器支持版本固定、SHA256 校验、保留数据升级和可选后台服务，不自动开放局域网访问。首次注册服务会直接启动；尚未设置管理员密码时，通过浏览器输入服务日志中的初始化令牌完成设置。
 
+## 卸载
+
+从仓库下载独立 [卸载脚本](scripts/uninstall.sh)，无需网络依赖即可执行。以 Linux 系统安装为例：
+
+```sh
+sh uninstall.sh --install-dir /opt/shell-wol --dry-run
+sudo sh uninstall.sh --install-dir /opt/shell-wol
+```
+
+默认卸载程序和后台服务，保留 YAML、日志及重装所需的最小元数据；显式 `--purge` 才会删除已知数据文件。用户安装加 `--user`。未知文件、系统账户和系统日志始终保留，不自动杀死手动运行的进程或删除已有数据锁。下载、平台示例及失败处理见 [卸载指南](docs/install.md#卸载与重新安装)。
+
 ## 本地构建与启动
 
 需要 Go 1.23 或更新版本。使用项目现有 checkout，无需创建 Git worktree。
@@ -137,7 +148,7 @@ OpenWrt/二次开发固件需保留 rc.common/procd 才能使用对应服务模�
 ```sh
 go test -race ./...
 go vet ./...
-python3 tests/installer/test_install.py
+python3 -m unittest discover -s tests/installer -p 'test_*.py' -v
 sh scripts/template-checksums.sh --check
 ./scripts/build.sh
 ```

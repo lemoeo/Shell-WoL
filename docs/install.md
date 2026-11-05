@@ -150,12 +150,67 @@ sudo cat "/Library/Application Support/Shell-WoL/data/service.log"
 
 程序版本正确不等于该固件上的广播、开机启动都已验证；macOS launchd、真实 systemd/procd 与路由器仍需对应系统实测。当前安装器测试在 Linux 运行，下载、服务管理的故障场景使用隔离夹具验证。
 
+## 卸载与重新安装
+
+卸载器为独立 POSIX Shell 脚本，从仓库下载，不作为 Release 附件；下载后卸载过程不联网，也不依赖同目录下存在 install.sh。
+
+```sh
+curl --fail --location --proto '=https' --proto-redir '=https' \
+  https://raw.githubusercontent.com/lemoeo/Shell-WoL/main/scripts/uninstall.sh \
+  --output uninstall.sh
+```
+
+默认推荐路径与安装器一致。可以先预览，再执行：
+
+```sh
+# Linux 系统安装
+sh uninstall.sh --install-dir /opt/shell-wol --dry-run
+sudo sh uninstall.sh --install-dir /opt/shell-wol
+
+# macOS 或 Linux 用户安装
+sh uninstall.sh --user --dry-run
+sh uninstall.sh --user
+
+# 小米兼容固件，以 root 执行
+sh uninstall.sh --install-dir /data/shell-wol
+
+# 标准 OpenWrt，以 root 执行
+sh uninstall.sh --install-dir /etc/shell-wol
+
+# 显式清除已知配置、设备、记录及文件日志
+sudo sh uninstall.sh --install-dir /opt/shell-wol --purge
+```
+
+选项为 `--install-dir`、`--user`、`--purge`、`--dry-run`、`--yes`、`--help`。`--yes` 仅跳过最终确认，不忽略归属、路径、服务状态和进程检查。`--dry-run` 不创建锁、不停止服务、不修改文件。macOS 用户服务应由原登录用户执行，不要通过 sudo 切换到另一个用户的 LaunchAgent 域。
+
+卸载行为：
+
+| 内容 | 默认 | `--purge` |
+| --- | --- | --- |
+| 受管理的服务文件及开机启动 | 移除 | 移除 |
+| `bin/shell-wol`、`backup/shell-wol.previous` | 删除 | 删除 |
+| `data/config.yaml`、`devices.yaml`、`events.yaml` | 保留 | 删除 |
+| `data/service.log`、`service.err.log` | 保留 | 删除 |
+| 最小安装元数据 | 标记为已卸载，保留 | 移除 |
+| 未知文件、空的未知子目录 | 保留 | 保留 |
+| 系统账户、journal/syslog 中的历史日志 | 保留 | 保留 |
+
+脚本先验证安装元数据及服务命令的实际安装路径，再停止和禁用对应 systemd/procd/launchd 服务，确认服务停止后检查数据锁和本安装的可见运行进程。不会按进程名批量杀进程，也不直接递归删除根目录。仅删除明确列出的文件，最后尝试移除空目录。
+
+卸载器不再比较服务文件与安装记录中的摘要。修正 WorkingDirectory 引号、添加注释或调整服务参数后，只要服务命令仍指向本安装的程序和数据目录，就可卸载；不需要修改或重算元数据中的 `service_sha256`。如果服务指向另一个安装目录，仍会拒绝处理。此调整仅适用于卸载，安装器升级时对定制服务文件的覆盖保护保持不变。
+
+卸载使用和安装器相同的 `.install-lock` 防止并发，并在确认没有已有运行锁后临时创建自己的数据锁，防止常规服务同时重启。只清理自己创建的锁。检测到手动运行进程、遗留运行锁、无法判断服务状态、服务指向其他安装目录或路径为符号链接时，会中止；请先人工确认，不要盲目删除锁。Linux 检查可读取的 `/proc` 可执行路径，macOS 使用 ps；执行期间不要在另一个终端绕过数据锁启动程序。
+
+服务停止、禁用或重新加载失败时，不继续删除程序和数据；已经完成的服务操作可能保留。处理错误后可再次执行：原服务已停止、已卸载或文件已不存在且状态仍可确认时可继续；procd 脚本缺失导致无法查询状态时需先人工处理。脚本不删除系统服务账户，以保持保留数据的归属，并支持重新安装。
+
+默认卸载后直接用安装器指定原根目录重新安装，YAML 会保留；需要恢复后台服务时选择 `--service`。清除后若目录已不存在，再次卸载会正常提示无需处理。如果 `--purge` 后仍有未知文件，则目录保留且元数据已移除；再次操作会拒绝把它当作受管理安装，重新安装应选择空目录或先人工迁移未知文件。没有安装元数据的手动安装也需人工卸载。
+
 ## 维护者发布与验证
 
 ```sh
 go test -race ./...
 go vet ./...
-python3 tests/installer/test_install.py
+python3 -m unittest discover -s tests/installer -p 'test_*.py' -v
 VERSION=v0.1.0 ./scripts/build.sh
 # Linux 开发机可选：真实二进制安装与 HTTP 就绪集成检查
 go build -ldflags='-X main.version=v0.0.0-test' -o bin/shell-wol-install-test ./cmd/shell-wol

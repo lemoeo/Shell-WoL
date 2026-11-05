@@ -17,7 +17,7 @@ jobs:
       - run: sh scripts/template-checksums.sh --check
       - run: go test -race ./...
       - run: go vet ./...
-      - run: python3 tests/installer/test_install.py
+      - run: python3 -m unittest discover -s tests/installer -p 'test_*.py' -v
       - name: Native installer integration
         run: |
           go build -ldflags='-X main.version=v0.0.0-test' -o "$RUNNER_TEMP/shell-wol-test" ./cmd/shell-wol

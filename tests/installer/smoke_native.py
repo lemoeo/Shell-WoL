@@ -58,6 +58,11 @@ try:
             subprocess.run([str(installed), 'check', '--data-dir', str(data), '--require-password', '--running'],
                            check=True, stdout=subprocess.DEVNULL)
             fixture.run_install(success=False)  # Manual process owns the data lock.
+            blocked = subprocess.run(['sh', str(Path(__file__).resolve().parents[2] / 'scripts/uninstall.sh'),
+                                      '--user', '--install-dir', str(fixture.root), '--yes', '--purge'],
+                                     text=True, capture_output=True)
+            assert blocked.returncode != 0 and installed.exists()
+            assert (data / '.lock').exists()
         finally:
             process.terminate()
             process.wait(timeout=10)
@@ -67,6 +72,14 @@ try:
     assert (fixture.root / 'backup/shell-wol.previous').exists()
     assert not (fixture.root / '.install-lock').exists()
     assert not (data / '.lock').exists()
-    print('PASS: native install, uninitialized LAN startup, browser password setup, HTTP readiness, runtime lock, upgrade')
+    uninstall = ['sh', str(Path(__file__).resolve().parents[2] / 'scripts/uninstall.sh'),
+                 '--user', '--install-dir', str(fixture.root), '--yes']
+    subprocess.run(uninstall, check=True, stdout=subprocess.DEVNULL)
+    assert not installed.exists() and config.read_bytes() == before
+    fixture.run_install()
+    assert installed.exists() and config.read_bytes() == before
+    subprocess.run(uninstall + ['--purge'], check=True, stdout=subprocess.DEVNULL)
+    assert not fixture.root.exists()
+    print('PASS: native install, LAN setup, readiness, runtime lock, upgrade, data-preserving uninstall/reinstall, purge')
 finally:
     fixture.tearDown()
