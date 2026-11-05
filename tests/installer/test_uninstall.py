@@ -198,12 +198,21 @@ class UninstallTests(unittest.TestCase):
     @unittest.skipUnless(Path('/proc/self').exists(), 'Linux executable inspection test')
     def test_manual_process_without_data_lock_is_detected(self):
         self.install();binary=self.root/'bin/shell-wol';shutil.copyfile(shutil.which('sleep'),binary)
-        process=subprocess.Popen([str(binary),'30'])
+        # Some distributions provide sleep through a multicall executable. Keep
+        # its applet name in argv[0] while executing our copy at the install path;
+        # otherwise renaming it to shell-wol can make it exit immediately.
+        process=subprocess.Popen(['sleep','30'],executable=str(binary),stderr=subprocess.PIPE,text=True)
         try:
+            if process.poll() is not None:
+                self.fail('sleep fixture exited before inspection: '+process.stderr.read())
+            self.assertEqual(os.readlink(f'/proc/{process.pid}/exe'),str(binary),
+                             'fixture must execute the installed binary, not a wrapper')
             self.uninstall('--purge',success=False)
             self.assertTrue(binary.exists());self.assertIsNone(process.poll())
             self.assertFalse((self.root/'data/.lock').exists())
-        finally:process.terminate();process.wait(timeout=5)
+        finally:
+            if process.poll() is None:process.terminate()
+            process.wait(timeout=5);process.stderr.close()
     def test_unknown_process_inspection_preserves_files(self):
         self.install();self.fixture.tool('readlink','#!/bin/sh\nexit 1\n')
         self.uninstall('--purge',success=False)
