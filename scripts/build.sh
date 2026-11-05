@@ -3,6 +3,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 version=${VERSION:-dev}
 mkdir -p dist
+# OpenWrt and compatible derivatives use GOOS=linux too. Select by CPU/ABI,
+# not router brand; see docs/openwrt.md for firmware and runtime requirements.
 for target in darwin/amd64 darwin/arm64 windows/amd64 windows/arm64 linux/amd64 linux/arm64 linux/arm/7 linux/mips/softfloat linux/mipsle/softfloat; do
   IFS=/ read -r target_os target_arch variant <<< "$target"
   suffix=""; [[ "$target_os" != windows ]] || suffix=.exe
