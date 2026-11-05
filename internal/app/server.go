@@ -7,12 +7,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -215,12 +215,6 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 		apiError(w, 409, errors.New("管理员已初始化"))
 		return
 	}
-	host, _, _ := net.SplitHostPort(r.RemoteAddr)
-	ip := net.ParseIP(host)
-	if ip == nil || !ip.IsLoopback() {
-		apiError(w, 403, errors.New("首次设置仅允许本机访问；远程部署请先使用 init --password-stdin"))
-		return
-	}
 	var input struct {
 		Token    string `json:"token"`
 		Password string `json:"password"`
@@ -379,17 +373,14 @@ func (s *Server) probe(w http.ResponseWriter, r *http.Request) {
 	}
 	respond(w, 200, map[string]any{"reachable": online, "message": message})
 }
-func ValidateListen(addr string, configured bool) error {
-	host, port, e := net.SplitHostPort(addr)
-	if e != nil {
-		return e
+func ValidateListen(addr string) error {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return err
 	}
-	if port == "" {
-		return errors.New("缺少监听端口")
-	}
-	ip := net.ParseIP(host)
-	if !configured && (ip == nil || !ip.IsLoopback()) {
-		return fmt.Errorf("局域网监听前请先运行 init --password-stdin 设置管理员密码")
+	number, err := strconv.Atoi(port)
+	if err != nil || number < 1 || number > 65535 {
+		return errors.New("监听端口须为 1–65535")
 	}
 	return nil
 }

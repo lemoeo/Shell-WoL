@@ -152,7 +152,7 @@ service_start() {
     esac
     attempts=0
     while [ "$attempts" -lt 10 ]; do
-        if service_active && "$BIN/shell-wol" check --data-dir "$DATA" --require-password --running >/dev/null 2>&1; then return 0; fi
+        if service_active && "$BIN/shell-wol" check --data-dir "$DATA" --running >/dev/null 2>&1; then return 0; fi
         attempts=$((attempts+1)); sleep 1
     done
     return 1
@@ -237,7 +237,7 @@ prepare_service_user() {
         if [ "$USER_MODE" = 0 ]; then chown -R "$SERVICE_USER" "$DATA"; fi
     fi
 }
-check_ready() {
+password_ready() {
     # Use the application's YAML parser rather than interpreting YAML in shell.
     "$BIN/shell-wol" check --data-dir "$DATA" --require-password >/dev/null 2>&1
 }
@@ -381,14 +381,9 @@ main() {
         if [ "$SERVICE" = procd ]; then chmod 755 "$SERVICE_FILE"; else chmod 644 "$SERVICE_FILE"; fi
         service_reload || fail '服务配置加载失败'
         service_hash=$(checksum "$SERVICE_FILE")
-        if check_ready; then
-            service_enable || fail '服务启用失败'
-            service_start || fail '服务启动检查失败'
-            say '后台服务已启动；服务状态检查通过。'
-        else
-            service_disable || fail '无法禁用尚未初始化的服务'
-            say '服务已注册但未启动：请先设置管理员密码，再启用并启动服务。'
-        fi
+        service_enable || fail '服务启用失败'
+        service_start || fail '服务启动检查失败'
+        say '后台服务已启动；Web 接口就绪检查通过。'
     fi
     {
         printf 'schema=1\nversion=%s\nservice=%s\nservice_sha256=%s\n' "$VERSION" "$SERVICE" "$service_hash"
@@ -400,13 +395,20 @@ main() {
     if [ -n "$SERVICE_USER" ] && [ "$USER_MODE" = 0 ]; then
         say "手动运行（先停止后台服务）：sudo -u \"$SERVICE_USER\" \"$BIN/shell-wol\" serve --data-dir \"$DATA\""
     else say "手动运行：\"$BIN/shell-wol\" serve --data-dir \"$DATA\""; fi
-    if ! check_ready; then
-        say "请设置密码（由拥有数据目录权限的账户运行）："
+    if ! password_ready; then
+        say '尚未设置管理员密码：可在浏览器使用本次启动的初始化令牌完成设置。'
+        case "$SERVICE" in
+            systemd) say '查看令牌：sudo journalctl -u shell-wol -n 30 --no-pager' ;;
+            procd) say '查看令牌：logread -e shell-wol' ;;
+            launchd-user|launchd-system) say "查看令牌：$DATA/service.log（系统安装使用 sudo 读取）" ;;
+            none) say '手动启动 serve 后，在启动终端查看令牌。' ;;
+        esac
+        say '也可先停止服务，再以实际数据账户通过标准输入初始化：'
         if [ -n "$SERVICE_USER" ] && [ "$USER_MODE" = 0 ]; then
             say "sudo -u \"$SERVICE_USER\" \"$BIN/shell-wol\" init --data-dir \"$DATA\" --password-stdin"
         else say "\"$BIN/shell-wol\" init --data-dir \"$DATA\" --password-stdin"; fi
     fi
-    say '默认仅监听 127.0.0.1:8080。路由器请设置密码后再配置 LAN 监听；安装器不会修改防火墙。'
+    say '默认仅监听 127.0.0.1:8080。可显式配置 LAN 监听后通过浏览器初始化；安装器不会修改防火墙。'
     if [ "$SERVICE" != none ]; then say "服务类型：$SERVICE；服务文件：$SERVICE_FILE"; fi
 }
 

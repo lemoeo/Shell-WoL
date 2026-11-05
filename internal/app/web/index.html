@@ -3,7 +3,7 @@
 <body>
 <header><div class="brand"><span class="logo">⏻</span><div><strong>Shell-WoL</strong><small>让设备，随时就绪。</small></div></div><button id="logout" hidden>退出登录</button></header>
 <main>
-<section id="auth" class="panel narrow" hidden><p class="eyebrow">局域网 · 网络唤醒</p><h1 id="auth-title">欢迎回来</h1><p id="auth-description">登录后管理你的设备。</p><form id="auth-form"><label id="token-label" hidden>初始化令牌<input id="token" autocomplete="off"></label><label>管理员密码<input id="password" type="password" required maxlength="72" autocomplete="current-password"></label><button class="primary" type="submit" id="auth-submit">登录</button></form><p class="hint">首次部署可在本机设置密码，或使用 init --password-stdin。</p></section>
+<section id="auth" class="panel narrow" hidden><p class="eyebrow">局域网 · 网络唤醒</p><h1 id="auth-title">欢迎回来</h1><p id="auth-description">登录后管理你的设备。</p><form id="auth-form"><label id="token-label" hidden>初始化令牌<input id="token" autocomplete="off"></label><label>管理员密码<input id="password" type="password" required maxlength="72" autocomplete="current-password"></label><button class="primary" type="submit" id="auth-submit">登录</button></form><p class="hint">首次部署请使用启动终端或服务日志中的初始化令牌设置密码。</p></section>
 <div id="dashboard" hidden>
 <section class="intro"><div><p class="eyebrow">YOUR NETWORK, AWAKE</p><h1>设备控制台</h1><p>唤醒你的电脑，让连接从这里开始。</p></div><button class="primary" id="add">＋ 添加设备</button></section>
 <nav><button class="tab active" data-view="devices">设备</button><button class="tab" data-view="history">操作记录</button><button class="tab" data-view="settings">设置</button></nav>

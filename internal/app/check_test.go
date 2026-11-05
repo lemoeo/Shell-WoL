@@ -37,14 +37,20 @@ func TestCheckDataReadOnly(t *testing.T) {
 }
 func TestCheckRunning(t *testing.T) {
 	store := newStore(t)
-	if err := store.SetPassword("check-test-password"); err != nil {
-		t.Fatal(err)
-	}
 	server := httptest.NewServer(NewServer(store).Handler())
 	defer server.Close()
 	config := store.Config()
 	config.Listen = strings.TrimPrefix(server.URL, "http://")
 	if err := store.SaveConfig(config); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckData(store.dir, false, true); err != nil {
+		t.Fatalf("pending initialization must be ready: %v", err)
+	}
+	if err := CheckData(store.dir, true, true); err == nil {
+		t.Fatal("explicit password requirement ignored")
+	}
+	if err := store.SetPassword("check-test-password"); err != nil {
 		t.Fatal(err)
 	}
 	if err := CheckData(store.dir, true, true); err != nil {

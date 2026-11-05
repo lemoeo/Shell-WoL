@@ -31,7 +31,7 @@ sh install.sh
 sh install.sh --user --yes
 ```
 
-安装器支持版本固定、SHA256 校验、保留数据升级和可选后台服务，不自动开放局域网访问。首次注册服务而未设置管理员密码时，服务保持禁用，按输出提示初始化后再启动。
+安装器支持版本固定、SHA256 校验、保留数据升级和可选后台服务，不自动开放局域网访问。首次注册服务会直接启动；尚未设置管理员密码时，通过浏览器输入服务日志中的初始化令牌完成设置。
 
 ## 本地构建与启动
 
@@ -47,20 +47,17 @@ Windows 将程序名换为 `shell-wol.exe`。直接运行 `serve` 会创建 `dat
 
 ### 局域网访问与无本机浏览器的部署
 
-无本机浏览器时，先使用标准输入设置管理员密码，再开放监听：
+允许未设置密码时直接启动局域网监听：
 
 ```sh
-# Bash 示例；密码不放入命令行参数或 Shell 历史
-read -r -s -p '管理员密码: ' wol_password
-printf '\n'
-printf '%s' "$wol_password" | ./bin/shell-wol init --data-dir ./data --password-stdin
-unset wol_password
 ./bin/shell-wol serve --data-dir ./data --listen 0.0.0.0:8080
 ```
 
-OpenWrt 的 BusyBox Shell 可用 `read -r -s wol_password`。PowerShell 可通过交互式安全输入转为标准输入传给程序，避免将密码直接写进命令历史。
+在局域网浏览器打开 `http://运行设备IP:8080`，输入启动终端显示的初始化令牌并设置管理员密码，再登录管理。后台服务的令牌从服务日志读取：systemd 使用 `journalctl -u shell-wol`，OpenWrt 使用 `logread -e shell-wol`，macOS 使用数据目录的 `service.log`。
 
-没有管理员密码时，程序拒绝非回环地址监听。`--listen` 是本次覆盖，不会写入配置；Web 设置中的监听地址在重启后生效。程序不自动改防火墙，请仅放行可信 LAN，勿开放到 WAN。
+初始化令牌只对本次启动有效，不会通过 Web 返回；已设置密码后，初始化接口关闭。未设置密码或未登录时不能访问设备管理、设置或唤醒接口。也可选择先用 `init --password-stdin` 从终端设置密码。
+
+默认监听仍为 `127.0.0.1:8080`。`--listen` 只覆盖本次运行；持久修改须编辑 `config.yaml` 或在 Web 设置中保存，并重启服务。程序不自动改防火墙，请仅放行可信 LAN，勿开放到 WAN。
 
 局域网 HTTP 不加密。推荐在可信网络内使用；需要远程访问时使用 VPN，或终止 TLS 的可信 HTTPS 反向代理。反向代理需保留原始 Host；将 `public_url` 设置为实际外部地址（如 `https://wol.example.com`），以校验浏览器 Origin 并启用 Secure Cookie。应用不信任 `X-Forwarded-*`，不要把后端端口直接暴露给外部。目标电脑需接通电源、启用 BIOS/UEFI 和操作系统的 WoL，通常需有线连接。跨 VLAN、客户端隔离和外网广播不在首版支持范围内。
 

@@ -75,36 +75,36 @@ sh install.sh --arch mipsle --service --yes
 
 系统安装的程序及元数据由安装账户管理，后台服务仅需写 data；用户安装的程序与服务属于同一账户。服务文件放在操作系统要求的 systemd/init.d/LaunchAgents/LaunchDaemons 目录。模板由安装器填充，不能直接复制含 `@ROOT@` 的模板启动。
 
-`--service` 在没有管理员密码时只注册并禁用服务，不立即启动。按照安装器输出，以**实际数据账户**运行密码初始化。例如 Linux systemd 安装：
+`--service` 会注册、启用并启动服务，尚未设置管理员密码也能启动。安装器使用 `check --running` 请求实际 Web 接口验证就绪；“待初始化”和“已初始化”均属于可用的服务状态。
+
+首次通过浏览器设置密码：
+
+1. 本机访问默认地址；局域网访问需先在服务停止时将 `data/config.yaml` 中 `listen` 改为 LAN 地址或 `0.0.0.0:8080`，然后启动服务。默认不会自动开放 LAN 监听。
+2. 从当前启动的终端或服务日志取得随机初始化令牌。
+3. 打开管理页面，输入令牌，设置 12–72 字节的密码。
+4. 使用新密码登录；不需要重启服务。
+
+令牌不会通过 Web 返回，重启前的旧令牌失效；初始化成功后不能再次通过初始化接口更改密码。设备管理、配置、记录和唤醒仍要求登录，初始化接口保留同源检查和请求限流。
+
+查看当前启动的令牌：
 
 ```sh
-read -r -s -p '管理员密码: ' wol_password
-printf '\n'
-printf '%s' "$wol_password" | sudo -u shell-wol \
-  /opt/shell-wol/bin/shell-wol init --data-dir /opt/shell-wol/data --password-stdin
-unset wol_password
-sudo systemctl enable --now shell-wol
-```
+# Linux systemd
+sudo journalctl -u shell-wol -n 30 --no-pager
 
-macOS 系统安装用 `sudo -u daemon` 初始化；用户安装直接执行程序；路由器通常为 root。不要用错误账户生成仅该账户可读的 0600 配置文件。没有 sudo 的精简 Linux 应用系统支持的账户切换工具执行。
-
-初始化后可重复运行同样的安装命令，让安装器检查配置并启动服务，或使用原生服务命令：
-
-```sh
 # OpenWrt
-/etc/init.d/shell-wol enable
-/etc/init.d/shell-wol start
+logread -e shell-wol
 
-# macOS 用户安装（初始化后）
-launchctl enable "gui/$(id -u)/io.github.lemoeo.shell-wol"
-launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/io.github.lemoeo.shell-wol.plist"
+# macOS 用户安装
+cat "$HOME/Library/Application Support/Shell-WoL/data/service.log"
 
-# macOS 系统安装（初始化后）
-sudo launchctl enable system/io.github.lemoeo.shell-wol
-sudo launchctl bootstrap system /Library/LaunchDaemons/io.github.lemoeo.shell-wol.plist
+# macOS 系统安装
+sudo cat "/Library/Application Support/Shell-WoL/data/service.log"
 ```
 
-路由器首次启动服务前，还应在服务停止时编辑 `data/config.yaml`，设置合适的 LAN 监听地址，并检查 LAN/WAN 防火墙。桌面模式可在本机用终端 `serve`，然后通过浏览器完成首次设置；接着先停止手动进程，再重新运行安装器或启动后台服务。
+日志可能保留上次启动的旧令牌，应使用最近一次启动输出的令牌，不要公开日志中的令牌。也可先停止服务，再通过 `init --password-stdin` 设置密码；Linux systemd 使用 `sudo -u shell-wol`，macOS 系统安装使用 `sudo -u daemon`，用户安装使用当前用户，路由器通常使用 root。不要用错误账户生成仅该账户可读的 0600 配置文件。
+
+路由器需检查 LAN/WAN 防火墙。桌面模式可直接运行 `serve`，局域网模式可加 `--listen 0.0.0.0:8080`。不要同时运行手动进程和使用同一数据目录的后台服务。
 
 ## 升级、冲突与回退
 
@@ -113,7 +113,7 @@ sudo launchctl bootstrap system /Library/LaunchDaemons/io.github.lemoeo.shell-wo
 - 下载、SHA256 和版本运行检查在替换程序前完成；服务模板也验证摘要。
 - 升级前只读校验已有 YAML，停止本安装管理的服务，再检查运行锁。安装器不会删除 `data/.lock`。
 - 程序替换后保留旧程序为 `backup/shell-wol.previous`，已有 YAML 不改写、不重置密码。
-- 已设置密码时，启动服务后会实际请求配置地址的 `/api/session`，仅有进程或服务状态不足以通过就绪检查。
+- 启动服务后会实际请求配置地址的 `/api/session`，未初始化时也应正常响应；仅有进程或服务状态不足以通过就绪检查。
 - 启动失败会尝试恢复旧程序、服务文件、安装元数据和原有启用/运行状态，并明确报告恢复失败。数据不做跨版本迁移；将来若有格式变化，需另行制定迁移与数据备份流程。
 - 安装器拒绝覆盖不属于本安装的服务文件，以及摘要发生变化的用户定制服务文件。应备份后人工合并。
 - 目标非空且没有安装元数据时拒绝覆盖；老版手动安装需先停止服务、备份数据，选择新目录安装，再在服务停止时迁移 YAML。路径更换需人工迁移服务文件。

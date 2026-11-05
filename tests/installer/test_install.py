@@ -126,12 +126,31 @@ class InstallerTests(unittest.TestCase):
         before=(self.root/'bin/shell-wol').read_bytes()
         self.make_release('v1.2.4');self.run_install(success=False)
         self.assertTrue((self.root/'data/.lock').exists());self.assertEqual((self.root/'bin/shell-wol').read_bytes(),before)
-    def test_service_registration_defers_until_password(self):
+    def test_service_starts_before_password_setup(self):
         self.run_install('--service',service=True)
-        self.assertTrue((self.service/'shell-wol.service').exists());self.assertFalse((self.service/'active').exists())
+        self.assertTrue((self.service/'shell-wol.service').exists());self.assertTrue((self.service/'active').exists())
         self.ready();self.run_install(service=True)
         self.assertTrue((self.service/'active').exists());self.assertTrue((self.service/'enabled').exists())
         text=(self.service/'shell-wol.service').read_text();self.assertIn(str(self.root),text);self.assertNotIn('@ROOT@',text)
+    @unittest.skipUnless(shutil.which('systemd-analyze'), 'systemd-analyze is required for unit verification')
+    def test_systemd_unit_parser(self):
+        # Parse real generated units, including a root containing spaces. Shell
+        # syntax and mocked systemctl cannot validate systemd directive syntax.
+        for name in ('plain-root', 'Root With Spaces'):
+            with self.subTest(root=name):
+                root=self.base/name
+                (root/'bin').mkdir(parents=True)
+                (root/'data').mkdir()
+                shutil.copyfile(self.assets/'shell-wol-linux-amd64',root/'bin/shell-wol')
+                (root/'bin/shell-wol').chmod(0o755)
+                command='. "$1"; TMP="$2"; ROOT="$3"; SERVICE=systemd; SERVICE_GROUP=fixture; render_service'
+                subprocess.run(['sh','-c',command,'test',str(INSTALLER),str(self.assets),str(root)],env=self.env,check=True)
+                unit=self.service/'shell-wol.service'
+                shutil.copyfile(self.assets/'rendered-service',unit)
+                runtime=self.base/'runtime';runtime.mkdir(exist_ok=True);runtime.chmod(0o700)
+                env=os.environ.copy();env['XDG_RUNTIME_DIR']=str(runtime)
+                result=subprocess.run(['systemd-analyze','--user','verify','--man=no',str(unit)],env=env,text=True,capture_output=True)
+                self.assertEqual(result.returncode,0,result.stdout+result.stderr)
     def test_failed_fresh_install_can_retry(self):
         self.env['FAIL_RELOAD']='1'
         self.run_install('--service',service=True,success=False)

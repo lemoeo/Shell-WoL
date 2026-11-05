@@ -7,7 +7,8 @@ After=network.target
 Type=simple
 User=shell-wol
 Group=@GROUP@
-WorkingDirectory="@ROOT@"
+# WorkingDirectory takes a literal path, unlike ExecStart's quoted arguments.
+WorkingDirectory=@ROOT@
 ExecStart="@ROOT@/bin/shell-wol" serve --data-dir "@ROOT@/data"
 Restart=on-failure
 RestartSec=5

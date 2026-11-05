@@ -48,28 +48,20 @@ sh install.sh --service
 
 默认根目录：标准 OpenWrt 为 `/etc/shell-wol`；检测到小米特征 `/data/etc/crontabs/root` 且 `/data` 可写时，为 `/data/shell-wol`。根目录下 `bin/shell-wol` 是程序，`data/` 是 YAML，`backup/` 是升级备份。请确认所选分区持久可写；程序和数据不能放在重启即清空的 `/tmp`。
 
-默认关闭路由器操作记录（`log_limit: 0`）。首次安装不设置密码；`--service` 只注册并禁用服务，尚未启用密码时不会启动。
+默认关闭路由器操作记录（`log_limit: 0`）。首次安装不设置密码；`--service` 会直接注册并启动服务，可在浏览器完成初始化。默认监听本机，局域网访问需显式修改监听地址。
 
 ## 3. 初始化和 LAN 访问
 
-以标准 OpenWrt 的默认路径为例，小米固件请替换为 `/data/shell-wol`：
+以标准 OpenWrt 的默认路径为例，小米固件请替换为 `/data/shell-wol`。先停止服务并编辑监听地址，再重启：
 
 ```sh
-read -r -s -p '管理员密码: ' wol_password
-printf '\n'
-printf '%s' "$wol_password" | /etc/shell-wol/bin/shell-wol init --data-dir /etc/shell-wol/data --password-stdin
-unset wol_password
-```
-
-密码须为 12–72 字节。如果固件裁剪的 Shell 不支持 `read -s`，应使用其支持的隐藏输入方式。确认初始化成功，在服务停止时编辑配置：
-
-```sh
+/etc/init.d/shell-wol stop
 sed -i 's/^listen:.*/listen: 0.0.0.0:8080/' /etc/shell-wol/data/config.yaml
-/etc/shell-wol/bin/shell-wol check --data-dir /etc/shell-wol/data --require-password
-/etc/init.d/shell-wol enable
 /etc/init.d/shell-wol start
 logread -e shell-wol
 ```
+
+使用最近一次启动日志中的初始化令牌，在浏览器设置管理员密码，再登录。密码须为 12–72 字节；令牌不通过网页返回，重启后旧令牌失效。也可选择停止服务后通过 `init --password-stdin` 设置密码，但不是启动的前置条件。
 
 从同一 LAN 的电脑或手机访问 `http://路由器LAN地址:8080`。若端口已占用，更换配置中的端口。确保防火墙仅允许可信 LAN 访问，不能假设二次开发固件具有 OpenWrt 的默认规则；无需公网端口映射。
 

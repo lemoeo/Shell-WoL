@@ -114,7 +114,7 @@ func TestSecurityBoundaries(t *testing.T) {
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	if w.Code != 403 {
-		t.Fatal("remote setup accepted")
+		t.Fatal("setup without a token accepted")
 	}
 	c := testClient{h: h}
 	for i := 0; i < 10; i++ {
@@ -123,13 +123,15 @@ func TestSecurityBoundaries(t *testing.T) {
 	if w = c.call("POST", "/api/login", map[string]string{}); w.Code != 429 {
 		t.Fatal("rate limit missing")
 	}
-	for _, addr := range []string{"0.0.0.0:8080", ":8080", "localhost:8080"} {
-		if ValidateListen(addr, false) == nil {
-			t.Fatal("unauthenticated public listen accepted")
+	for _, addr := range []string{"127.0.0.1:8080", "0.0.0.0:8080", ":8080", "localhost:8080", "[::]:8080"} {
+		if err := ValidateListen(addr); err != nil {
+			t.Fatalf("valid listen %s: %v", addr, err)
 		}
 	}
-	if e := ValidateListen("127.0.0.1:8080", false); e != nil {
-		t.Fatal(e)
+	for _, addr := range []string{"127.0.0.1", "0.0.0.0:", "0.0.0.0:-1", "0.0.0.0:65536", "0.0.0.0:http"} {
+		if ValidateListen(addr) == nil {
+			t.Fatalf("invalid listen accepted: %s", addr)
+		}
 	}
 	w = c.call("GET", "/", nil)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "Shell-WoL") {
@@ -168,5 +170,62 @@ func TestExplicitHTTPSOrigin(t *testing.T) {
 	h.ServeHTTP(response, request)
 	if response.Code != 403 {
 		t.Fatal("wrong scheme accepted")
+	}
+}
+
+func TestLANBrowserInitialization(t *testing.T) {
+	store := newStore(t)
+	server := NewServer(store)
+	handler := server.Handler()
+	request := func(method, path string, body any, origin string) *httptest.ResponseRecorder {
+		var raw bytes.Buffer
+		if body != nil {
+			if err := json.NewEncoder(&raw).Encode(body); err != nil {
+				t.Fatal(err)
+			}
+		}
+		r := httptest.NewRequest(method, "http://router.lan:8080"+path, &raw)
+		r.RemoteAddr = "192.168.1.50:12345"
+		r.Header.Set("Content-Type", "application/json")
+		if origin != "" {
+			r.Header.Set("Origin", origin)
+		}
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+	w := request("GET", "/api/session", nil, "")
+	if !strings.Contains(w.Body.String(), `"setup_required":true`) || strings.Contains(w.Body.String(), server.SetupToken()) {
+		t.Fatal("invalid setup state or token exposed")
+	}
+	for _, path := range []string{"/api/devices", "/api/config", "/api/events"} {
+		if request("GET", path, nil, "").Code != 401 {
+			t.Fatal("management accessible before login")
+		}
+	}
+	for _, token := range []string{"", "wrong"} {
+		if request("POST", "/api/setup", map[string]string{"token": token, "password": "lan-browser-password"}, "http://router.lan:8080").Code != 403 {
+			t.Fatal("invalid initialization token accepted")
+		}
+	}
+	input := map[string]string{"token": server.SetupToken(), "password": "lan-browser-password"}
+	if request("POST", "/api/setup", input, "http://evil.example").Code != 403 {
+		t.Fatal("cross-origin initialization accepted")
+	}
+	w = request("POST", "/api/setup", input, "http://router.lan:8080")
+	if w.Code != 200 {
+		t.Fatal(w.Body.String())
+	}
+	hash := store.Config().PasswordHash
+	input["password"] = "replacement-password"
+	if request("POST", "/api/setup", input, "http://router.lan:8080").Code != 409 || store.Config().PasswordHash != hash {
+		t.Fatal("administrator reset through setup")
+	}
+	if request("GET", "/api/devices", nil, "").Code != 401 {
+		t.Fatal("initialization bypassed login")
+	}
+	w = request("POST", "/api/login", map[string]string{"password": "lan-browser-password"}, "http://router.lan:8080")
+	if w.Code != 200 || len(w.Result().Cookies()) != 1 {
+		t.Fatal("initialized password does not work")
 	}
 }

@@ -155,12 +155,12 @@ func run(args []string) error {
 		if *listen != "" {
 			addr = *listen
 		}
-		if e = app.ValidateListen(addr, c.PasswordHash != ""); e != nil {
+		if e = app.ValidateListen(addr); e != nil {
 			return e
 		}
 		server := app.NewServer(store)
 		if c.PasswordHash == "" {
-			fmt.Println("首次启动：请在本机打开管理界面，使用以下一次性令牌设置密码：")
+			fmt.Println("首次启动：请打开管理界面，使用以下初始化令牌设置密码（本次启动有效）：")
 			fmt.Println(server.SetupToken())
 		}
 		httpServer := &http.Server{Addr: addr, Handler: server.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}

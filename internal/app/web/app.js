@@ -17,7 +17,7 @@ async function session() {
   const s = await api('/session'); csrf = s.csrf; setup = s.setup_required;
   $('#auth').hidden = s.authenticated; $('#dashboard').hidden = !s.authenticated; $('#logout').hidden = !s.authenticated;
   $('#auth-title').textContent = setup ? '设置管理员密码' : '欢迎回来';
-  $('#auth-description').textContent = setup ? '输入启动终端显示的初始化令牌，创建至少 12 字节的密码。' : '登录后管理你的设备。';
+  $('#auth-description').textContent = setup ? '输入启动终端或服务日志中的初始化令牌，创建至少 12 字节的密码。' : '登录后管理你的设备。';
   $('#token-label').hidden = !setup; $('#token').required = setup;
   $('#password').minLength = setup ? 12 : 1; $('#password').autocomplete = setup ? 'new-password' : 'current-password';
   $('#auth-submit').textContent = setup ? '设置密码' : '登录';
