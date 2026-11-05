@@ -1,0 +1,21 @@
+[Unit]
+Description=Shell-WoL network wake manager
+After=network.target
+
+[Service]
+Type=simple
+User=shell-wol
+Group=shell-wol
+StateDirectory=shell-wol
+WorkingDirectory=/var/lib/shell-wol
+ExecStart=/usr/local/bin/shell-wol serve --data-dir /var/lib/shell-wol
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
