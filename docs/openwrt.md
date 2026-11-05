@@ -36,85 +36,58 @@ free
 
 `uname -m` 仅显示 `mips` 时，不足以确定大小端。ARM 也要确认具体版本，不要将所有 32 位 ARM 设备都当作 ARMv7。未列出的架构需要另行评估和构建。构建脚本在开发电脑运行，不要求在路由器上安装 Go 或 Bash。
 
-## 2. 上传并检查二进制
+## 2. 安装器部署（推荐）
 
-例如从电脑上传 MIPS 小端版本（替换路由器 IP 和本地文件路径）：
-
-```sh
-scp -O shell-wol-linux-mipsle-softfloat root@192.168.1.1:/tmp/shell-wol
-```
-
-`-O` 用于没有 SFTP 服务的固件；若本机 SCP 客户端不支持此选项，使用固件支持的其他文件上传方式。在路由器上检查：
+详见 [安装与升级指南](install.md)。先从已发布的 Release 下载 `install.sh`，在路由器上以 root 执行：
 
 ```sh
-chmod +x /tmp/shell-wol
-/tmp/shell-wol version
+sh install.sh --service
 ```
 
-正常显示版本后，再安装到持久化位置：
+可以显式指定 `--version v0.1.0`、`--arch mipsle`、`--install-dir /持久化目录/shell-wol`。没有 curl 或支持证书校验的完整 wget 时，先用固件支持的方式安装下载工具及 CA 证书；不要关闭校验。
 
-```sh
-cp /tmp/shell-wol /usr/bin/shell-wol
-mkdir -p /etc/shell-wol
-chmod 700 /etc/shell-wol
-```
+默认根目录：标准 OpenWrt 为 `/etc/shell-wol`；检测到小米特征 `/data/etc/crontabs/root` 且 `/data` 可写时，为 `/data/shell-wol`。根目录下 `bin/shell-wol` 是程序，`data/` 是 YAML，`backup/` 是升级备份。请确认所选分区持久可写；程序和数据不能放在重启即清空的 `/tmp`。
 
-如果目录不可写或空间不足，应先选择固件支持的可执行存储位置，再同步修改后续命令及启动脚本中的路径。不要将需要保留的 YAML 数据放在重启即清空的 `/tmp`。
+默认关闭路由器操作记录（`log_limit: 0`）。首次安装不设置密码；`--service` 只注册并禁用服务，尚未启用密码时不会启动。
 
-## 3. 初始化并手动测试
+## 3. 初始化和 LAN 访问
 
-BusyBox ash 示例，密码通过标准输入传入，不写入命令历史：
+以标准 OpenWrt 的默认路径为例，小米固件请替换为 `/data/shell-wol`：
 
 ```sh
 read -r -s -p '管理员密码: ' wol_password
 printf '\n'
-printf '%s' "$wol_password" | /usr/bin/shell-wol init --data-dir /etc/shell-wol --password-stdin
+printf '%s' "$wol_password" | /etc/shell-wol/bin/shell-wol init --data-dir /etc/shell-wol/data --password-stdin
 unset wol_password
 ```
 
-密码须为 12–72 字节。如果固件裁剪的 Shell 不支持 `read -s`，应使用其支持的隐藏输入方式，勿将真实密码直接写入命令参数。确认初始化成功后，再继续修改配置。
-
-在服务停止时编辑 `/etc/shell-wol/config.yaml`，设置 LAN 访问与关闭操作记录：
+密码须为 12–72 字节。如果固件裁剪的 Shell 不支持 `read -s`，应使用其支持的隐藏输入方式。确认初始化成功，在服务停止时编辑配置：
 
 ```sh
-sed -i 's/^listen:.*/listen: 0.0.0.0:8080/' /etc/shell-wol/config.yaml
-sed -i 's/^log_limit:.*/log_limit: 0/' /etc/shell-wol/config.yaml
-/usr/bin/shell-wol serve --data-dir /etc/shell-wol
-```
-
-从同一 LAN 的电脑或手机访问 `http://路由器LAN地址:8080` 并登录。若端口已占用，更换配置中的端口。监听所有 IPv4 网卡时，应确保防火墙仅允许可信 LAN 访问，不能依赖二次开发固件具有与 OpenWrt 默认值相同的规则；无需公网端口映射。
-
-添加设备时，选择目标电脑所在 LAN 的实际 IPv4 网卡，例如 `br-lan`。广播地址按该接口的 IP 和子网掩码计算，不能固定假设为 `192.168.1.255`。目标电脑需启用 WoL 并保持供电。发送成功不代表已开机，可另行配置 TCP 上线检测。
-
-## 4. 配置 procd 后台服务
-
-先按 `Ctrl+C` 停止手动测试进程，避免两个写进程使用同一数据目录。确认以下命令返回成功；否则应按固件的实际服务机制适配，不直接套用脚本：
-
-```sh
-test -f /etc/rc.common && test -f /lib/functions/procd.sh
-```
-
-将仓库中的 [`deploy/shell-wol.openwrt`](../deploy/shell-wol.openwrt) 上传为 `/etc/init.d/shell-wol`，然后运行：
-
-```sh
-chmod +x /etc/init.d/shell-wol
+sed -i 's/^listen:.*/listen: 0.0.0.0:8080/' /etc/shell-wol/data/config.yaml
+/etc/shell-wol/bin/shell-wol check --data-dir /etc/shell-wol/data --require-password
 /etc/init.d/shell-wol enable
 /etc/init.d/shell-wol start
 logread -e shell-wol
 ```
 
-管理命令为 `/etc/init.d/shell-wol stop` 或 `/etc/init.d/shell-wol restart`。
+从同一 LAN 的电脑或手机访问 `http://路由器LAN地址:8080`。若端口已占用，更换配置中的端口。确保防火墙仅允许可信 LAN 访问，不能假设二次开发固件具有 OpenWrt 的默认规则；无需公网端口映射。
 
-正常退出会清理数据锁。异常终止留下 `/etc/shell-wol/.lock` 时，先停止服务，并通过 `pidof shell-wol` 等确认没有进程使用该数据目录，再用 `rmdir /etc/shell-wol/.lock` 删除空锁目录后启动。不要在进程运行期间删除锁目录。
+发送网卡选择目标电脑所在 LAN 的实际 IPv4 网卡，例如 `br-lan`。广播地址按 IP 和子网掩码计算，不能固定假设为 `192.168.1.255`。目标电脑需启用 WoL 并保持供电，发送成功不等于已开机。
 
-## 5. 升级与恢复
+## 4. 手动安装与后台服务
 
-1. 将新版本先上传到 `/tmp`，核对架构、版本及随构建产物提供的 SHA256SUMS。
-2. 停止服务，确认进程退出，将现有程序和 `/etc/shell-wol` 中的 YAML 文件备份到受保护的持久化位置。`config.yaml` 含密码哈希，不要公开备份。
-3. 替换程序并确认有执行权限，保留现有数据目录；不需要重新初始化密码。
-4. 启动服务，检查日志、Web 登录、设备列表及发送功能。
+不能在线下载时，可从电脑上传匹配的二进制到持久化根目录的 `bin/shell-wol`，授予执行权限，在 `data/` 初始化，再用 `serve --data-dir` 手动运行。不要直接复制 `deploy/shell-wol.openwrt` 启动：它是包含 `@ROOT@` 的模板，需要填入实际根目录。
 
-升级失败时，先停止服务，再恢复旧程序；若新版本修改了数据格式，应同时恢复对应版本的数据备份。不要覆盖正在运行的程序，也不要在服务运行时直接恢复 YAML。
+自动服务要求 `/etc/rc.common`、procd 库且 PID 1 为 procd。没有该能力的厂商固件应按实际服务机制适配，不修改 SSH、防火墙 include 或 NVRAM 来强行安装。
+
+服务管理使用 `/etc/init.d/shell-wol stop` 或 `/etc/init.d/shell-wol restart`。异常退出留下 `data/.lock` 时，先停止服务并确认无进程使用该目录，再人工删除空锁目录。不要在进程运行期间删除锁。
+
+## 5. 升级与旧目录迁移
+
+安装器管理的目录可再次运行脚本升级，保留 YAML、密码及服务类型。下载校验或服务就绪检查失败时会停止或尝试回退；详见 [升级与恢复](install.md)。
+
+以前手动部署的 `/usr/bin/shell-wol` 和 `/etc/shell-wol/*.yaml` 没有安装元数据，不会被自动覆盖。先停止旧服务、备份程序与数据，使用新的空根目录安装；在服务停止时把 YAML 迁移到新根目录的 `data/`。如果沿用旧服务名称，先备份旧服务文件并人工迁移，安装器拒绝覆盖不属于它的服务。原数据确认可用前不要删除旧目录。
 
 ## 兼容性验证与排查
 

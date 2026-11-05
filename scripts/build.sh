@@ -16,4 +16,15 @@ for target in darwin/amd64 darwin/arm64 windows/amd64 windows/arm64 linux/amd64 
     *) CGO_ENABLED=0 GOOS="$target_os" GOARCH="$target_arch" go build -trimpath -ldflags="-s -w -X main.version=$version" -o "$artifact" ./cmd/shell-wol ;;
   esac
 done
-(cd dist && sha256sum shell-wol-* > SHA256SUMS)
+# Release assets are self-contained; the installer verifies each selected asset.
+cp scripts/install.sh dist/install.sh
+cp deploy/shell-wol.service deploy/shell-wol.openwrt deploy/shell-wol.plist dist/
+printf '%s\n' "$version" > dist/VERSION
+(
+  cd dist
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum shell-wol-* shell-wol.service shell-wol.openwrt shell-wol.plist install.sh VERSION > SHA256SUMS
+  else
+    shasum -a 256 shell-wol-* shell-wol.service shell-wol.openwrt shell-wol.plist install.sh VERSION > SHA256SUMS
+  fi
+)

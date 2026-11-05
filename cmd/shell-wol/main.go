@@ -33,6 +33,7 @@ func run(args []string) error {
   serve       启动 Web 管理（默认 127.0.0.1:8080）
   init        创建 YAML 数据；--password-stdin 从标准输入设置管理员密码
   wake        --device ID 或 --mac MAC [--broadcast IPv4 --port 9 --repeat 3 --interface 名称]
+  check       只读校验 YAML；--require-password 检查密码；--running 检查服务接口
   interfaces  列出 IPv4 网卡与广播地址
   version     查看版本
 所有数据命令支持 --data-dir PATH（默认 ./data）；serve 支持 --listen HOST:PORT。
@@ -51,15 +52,18 @@ func run(args []string) error {
 		return json.NewEncoder(os.Stdout).Encode(n)
 	}
 	command := args[0]
-	if command != "init" && command != "serve" && command != "wake" {
+	if command != "init" && command != "serve" && command != "wake" && command != "check" {
 		return fmt.Errorf("未知命令 %q，使用 --help 查看帮助", command)
 	}
 	f := flag.NewFlagSet(command, flag.ContinueOnError)
 	dir := f.String("data-dir", "./data", "YAML 数据目录")
 	var listen, device, mac, broadcast, iface *string
 	var port, repeat *int
-	var password *bool
+	var password, requirePassword, running *bool
 	switch command {
+	case "check":
+		requirePassword = f.Bool("require-password", false, "要求管理员已初始化")
+		running = f.Bool("running", false, "请求本机服务接口验证就绪")
 	case "serve":
 		listen = f.String("listen", "", "覆盖监听地址")
 	case "init":
@@ -82,6 +86,13 @@ func run(args []string) error {
 	f.Visit(func(v *flag.Flag) { provided[v.Name] = true })
 	if f.NArg() != 0 {
 		return errors.New("不支持额外的位置参数")
+	}
+	if command == "check" {
+		if err := app.CheckData(*dir, *requirePassword, *running); err != nil {
+			return err
+		}
+		fmt.Println("检查通过")
+		return nil
 	}
 	if command == "wake" && *device == "" && *mac == "" {
 		return errors.New("请指定 --device 或 --mac")

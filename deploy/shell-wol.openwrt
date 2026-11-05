@@ -1,13 +1,14 @@
 #!/bin/sh /etc/rc.common
+# Managed by Shell-WoL installer; @ROOT@ is rendered on install.
 # For OpenWrt or compatible derivatives retaining rc.common and procd.
-# Router brand alone does not establish compatibility; see docs/openwrt.md.
 START=95
 STOP=10
 USE_PROCD=1
+INSTALL_ROOT='@ROOT@'
 
 start_service() {
     procd_open_instance
-    procd_set_param command /usr/bin/shell-wol serve --data-dir /etc/shell-wol
+    procd_set_param command "$INSTALL_ROOT/bin/shell-wol" serve --data-dir "$INSTALL_ROOT/data"
     procd_set_param respawn 3600 5 5
     procd_set_param stdout 1
     procd_set_param stderr 1

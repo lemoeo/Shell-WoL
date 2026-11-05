@@ -18,6 +18,21 @@
 
 小米、网件等是设备品牌，不能仅凭品牌或“基于 OpenWrt”判断兼容：不同型号、固件版本可能限制 SSH、自定义程序或服务管理。需要允许运行匹配架构的二进制，且 CPU、内核和可用资源满足要求；现有开机启动脚本还要求 `/etc/rc.common` 和 procd。当前提供构建产物与部署示例，尚未完成路由器实机验证，不保证所有型号或原厂固件均兼容。
 
+## 安装
+
+macOS、Linux 和兼容路由器可使用 [安装脚本](scripts/install.sh)，完整选项见 [安装与升级指南](docs/install.md)。需要先有包含对应资产的 GitHub Release；源码推送本身不会发布安装包。
+
+程序与数据放在同一根目录：Linux 默认 `/opt/shell-wol`，兼容的小米固件默认 `/data/shell-wol`，OpenWrt 默认 `/etc/shell-wol`，macOS 用户默认 `~/Library/Application Support/Shell-WoL`。根目录下分别为 `bin/`、`data/`、`backup/`，服务注册文件使用系统规定的位置。
+
+```sh
+# 已下载 install.sh 后交互安装；Linux 系统安装需管理员权限
+sh install.sh
+# 或用户安装
+sh install.sh --user --yes
+```
+
+安装器支持版本固定、SHA256 校验、保留数据升级和可选后台服务，不自动开放局域网访问。首次注册服务而未设置管理员密码时，服务保持禁用，按输出提示初始化后再启动。
+
 ## 本地构建与启动
 
 需要 Go 1.23 或更新版本。使用项目现有 checkout，无需创建 Git worktree。
@@ -109,38 +124,24 @@ devices:
 
 ## 后台运行
 
-### Linux systemd
+### Linux、macOS 与 OpenWrt
 
-将程序复制到 `/usr/local/bin/shell-wol`；创建系统用户/组 `shell-wol`，将初始化后的数据放到 `/var/lib/shell-wol` 并归属该用户（目录 0700、文件 0600）。将 `deploy/shell-wol.service` 安装到 `/etc/systemd/system/`，然后：
+安装器自动生成路径正确的 systemd、launchd 或 procd 服务。`deploy/` 下的文件是含占位符的模板，不能直接复制启动，具体命令见 [安装指南](docs/install.md)。
 
-```sh
-sudo systemctl daemon-reload
-sudo systemctl enable --now shell-wol
-sudo journalctl -u shell-wol -f
-```
+Linux systemd 使用非 root 的 `shell-wol` 账户，macOS 用户安装使用当前账户、系统安装使用 `daemon`，路由器 procd 通常使用 root。密码初始化应以实际数据账户执行，避免配置文件权限不匹配。Linux 用户安装暂不自动注册后台服务。
 
-在配置中预先设置所需监听地址；未设置密码时仅回环监听。异常退出留下锁目录时，先停止服务并确认无进程使用，再手动清理空锁目录并重启服务。
-
-### OpenWrt 及兼容二次开发固件
-
-适用于满足上述平台条件的固件；架构选择、安装、升级和兼容性排查见 [OpenWrt 部署指南](docs/openwrt.md)。
-
-1. 用 `uname -m` 等确认 CPU 架构，选择对应二进制；MIPS 还需确认大小端和浮点 ABI。
-2. 程序放 `/usr/bin/shell-wol`，授予执行权限；数据放 `/etc/shell-wol`，先设置密码和 LAN 监听地址。
-3. 将 `deploy/shell-wol.openwrt` 复制为 `/etc/init.d/shell-wol` 并 `chmod +x`。
-4. `/etc/init.d/shell-wol enable`，再 `/etc/init.d/shell-wol start`；`logread` 查看日志。
-
-进程被强制终止留下锁时，先 stop 服务，确认进程停止，再删除 `/etc/shell-wol/.lock` 后 start。路由器建议 `log_limit: 0`，正常启停会清理锁；不自动创建防火墙规则。二次开发固件如未保留 rc.common/procd，应使用其实际服务管理方式，不应直接安装此启动脚本。macOS 与 Windows 首版可直接终端运行，暂不提供原生服务安装器。
+OpenWrt/二次开发固件需保留 rc.common/procd 才能使用对应服务模式；厂商固件没有这些能力时可手动运行，具体架构与 LAN 设置见 [OpenWrt 部署指南](docs/openwrt.md)。Windows 首版继续终端运行，暂不提供原生服务安装器。
 
 ## 构建与验证
 
 ```sh
 go test -race ./...
 go vet ./...
+python3 tests/installer/test_install.py
 ./scripts/build.sh
 ```
 
-构建默认 `CGO_ENABLED=0`，输出到 `dist/` 并生成 SHA256SUMS：
+构建默认 `CGO_ENABLED=0`，输出到 `dist/`，附带安装器、服务模板、VERSION 和 SHA256SUMS。推送合法版本标签可触发 [Release 工作流](.github/workflows/release.yml)，发布步骤见 [安装指南](docs/install.md)。构建目标：
 
 | 系统 | 架构 |
 | --- | --- |
@@ -152,5 +153,7 @@ go vet ./...
 OpenWrt 使用 Linux 内核，因此二进制仍命名为 `shell-wol-linux-*`、构建仍使用 `GOOS=linux`，无需另设 `GOOS=openwrt` 或按路由器品牌构建。构建脚本在开发电脑的 Bash 中运行，路由器只需运行匹配的二进制。ARMv5、ARMv6 和其他未列出的架构没有现成构建产物，需另行评估。
 
 交叉编译成功不代表已在所有设备实测。工具链版本影响最低系统/内核要求；部署前请核对所用 Go 版本的系统要求和设备架构。测试覆盖魔术包内容与实际本机 UDP 收包、TCP 检测、YAML 注释/清空字段/锁与失败恢复、会话、认证、CSRF、限流和 API 设备管理。真实广播、关机唤醒及各系统服务部署仍需在对应硬件网络上验证。
+
+`check --data-dir PATH` 只读校验 YAML，不持有写锁；`--require-password` 要求密码已设置，`--running` 还会请求配置地址的会话接口验证服务就绪。
 
 暂不实现定时唤醒、自动发现、跨网段代理、自动更新、多用户或远程关机。

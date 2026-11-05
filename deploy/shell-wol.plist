@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Managed by Shell-WoL installer; placeholders are rendered on install. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>io.github.lemoeo.shell-wol</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>@ROOT@/bin/shell-wol</string>
+        <string>serve</string>
+        <string>--data-dir</string>
+        <string>@ROOT@/data</string>
+    </array>
+    <key>WorkingDirectory</key><string>@ROOT@</string>
+    <key>UserName</key><string>@USERNAME@</string>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>ThrottleInterval</key><integer>10</integer>
+    <key>Umask</key><integer>63</integer>
+    <key>StandardOutPath</key><string>@ROOT@/data/service.log</string>
+    <key>StandardErrorPath</key><string>@ROOT@/data/service.err.log</string>
+</dict>
+</plist>

@@ -1,3 +1,4 @@
+# Managed by Shell-WoL installer; @ROOT@ and @GROUP@ are rendered on install.
 [Unit]
 Description=Shell-WoL network wake manager
 After=network.target
@@ -5,16 +6,16 @@ After=network.target
 [Service]
 Type=simple
 User=shell-wol
-Group=shell-wol
-StateDirectory=shell-wol
-WorkingDirectory=/var/lib/shell-wol
-ExecStart=/usr/local/bin/shell-wol serve --data-dir /var/lib/shell-wol
+Group=@GROUP@
+WorkingDirectory="@ROOT@"
+ExecStart="@ROOT@/bin/shell-wol" serve --data-dir "@ROOT@/data"
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
+ReadWritePaths="@ROOT@/data"
 UMask=0077
 
 [Install]
