@@ -1,8 +1,9 @@
-"""Offline uninstall lifecycle tests; managers operate only on private fixtures."""
+"""Offline uninstall lifecycle tests (Python + Go); managers use private fixtures."""
 import hashlib
 import os
 from pathlib import Path
 import shutil
+import select
 import subprocess
 import unittest
 
@@ -197,14 +198,20 @@ class UninstallTests(unittest.TestCase):
         self.uninstall(success=False);self.assertTrue((self.root/'bin/shell-wol').exists())
     @unittest.skipUnless(Path('/proc/self').exists(), 'Linux executable inspection test')
     def test_manual_process_without_data_lock_is_detected(self):
-        self.install();binary=self.root/'bin/shell-wol';shutil.copyfile(shutil.which('sleep'),binary)
-        # Some distributions provide sleep through a multicall executable. Keep
-        # its applet name in argv[0] while executing our copy at the install path;
-        # otherwise renaming it to shell-wol can make it exit immediately.
-        process=subprocess.Popen(['sleep','30'],executable=str(binary),stderr=subprocess.PIPE,text=True)
+        self.install();binary=self.root/'bin/shell-wol';binary.unlink()
+        # A copied host utility may dispatch by its name, use a wrapper, or exit
+        # during startup. Build a controlled executable and wait for its explicit
+        # readiness message before asking the uninstaller to inspect processes.
+        result=subprocess.run(['go','build','-o',str(binary),str(REPO/'tests/installer/testdata/running.go')],
+                              env=dict(os.environ,CGO_ENABLED='0'),text=True,capture_output=True)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        process=subprocess.Popen([str(binary)],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
         try:
-            if process.poll() is not None:
-                self.fail('sleep fixture exited before inspection: '+process.stderr.read())
+            ready,_,_=select.select([process.stdout],[],[],5)
+            self.assertTrue(ready,'process fixture did not become ready within 5 seconds')
+            line=process.stdout.readline()
+            self.assertEqual(line,'ready\n','process fixture failed to start: '+line)
+            self.assertIsNone(process.poll(),'process fixture exited before inspection')
             self.assertEqual(os.readlink(f'/proc/{process.pid}/exe'),str(binary),
                              'fixture must execute the installed binary, not a wrapper')
             self.uninstall('--purge',success=False)
@@ -212,7 +219,7 @@ class UninstallTests(unittest.TestCase):
             self.assertFalse((self.root/'data/.lock').exists())
         finally:
             if process.poll() is None:process.terminate()
-            process.wait(timeout=5);process.stderr.close()
+            process.wait(timeout=5);process.stdout.close();process.stderr.close()
     def test_unknown_process_inspection_preserves_files(self):
         self.install();self.fixture.tool('readlink','#!/bin/sh\nexit 1\n')
         self.uninstall('--purge',success=False)
