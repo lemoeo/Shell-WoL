@@ -14,6 +14,7 @@ jobs:
         with:
           go-version: stable
           cache: true
+      - run: sh scripts/template-checksums.sh --check
       - run: go test -race ./...
       - run: go vet ./...
       - run: python3 tests/installer/test_install.py

@@ -20,12 +20,15 @@
 
 ## 安装
 
-macOS、Linux 和兼容路由器可使用 [安装脚本](scripts/install.sh)，完整选项见 [安装与升级指南](docs/install.md)。需要先有包含对应资产的 GitHub Release；源码推送本身不会发布安装包。
+macOS、Linux 和兼容路由器可使用 [安装脚本](scripts/install.sh)，完整选项见 [安装与升级指南](docs/install.md)。安装入口与服务模板从仓库下载，二进制从 GitHub Release 下载；源码推送本身不会发布二进制安装包。
 
 程序与数据放在同一根目录：Linux 默认 `/opt/shell-wol`，兼容的小米固件默认 `/data/shell-wol`，OpenWrt 默认 `/etc/shell-wol`，macOS 用户默认 `~/Library/Application Support/Shell-WoL`。根目录下分别为 `bin/`、`data/`、`backup/`，服务注册文件使用系统规定的位置。
 
 ```sh
-# 已下载 install.sh 后交互安装；Linux 系统安装需管理员权限
+# 从仓库下载入口脚本，查看后执行；Linux 系统安装需管理员权限
+curl --fail --location --proto '=https' --proto-redir '=https' \
+  https://raw.githubusercontent.com/lemoeo/Shell-WoL/main/scripts/install.sh \
+  --output install.sh
 sh install.sh
 # 或用户安装
 sh install.sh --user --yes
@@ -135,10 +138,11 @@ OpenWrt/二次开发固件需保留 rc.common/procd 才能使用对应服务模�
 go test -race ./...
 go vet ./...
 python3 tests/installer/test_install.py
+sh scripts/template-checksums.sh --check
 ./scripts/build.sh
 ```
 
-构建默认 `CGO_ENABLED=0`，输出到 `dist/`，附带安装器、服务模板、VERSION 和 SHA256SUMS。推送合法版本标签可触发 [Release 工作流](.github/workflows/release.yml)，发布步骤见 [安装指南](docs/install.md)。构建目标：
+构建默认 `CGO_ENABLED=0`，`dist/` 仅输出二进制、VERSION 和二进制 SHA256SUMS。安装器位于仓库 `scripts/install.sh`；服务模板与 `deploy/SHA256SUMS` 从所选二进制版本对应的仓库标签下载，不混用 `main` 模板。推送合法版本标签可触发 [Release 工作流](.github/workflows/release.yml)，发布步骤见 [安装指南](docs/install.md)。构建目标：
 
 | 系统 | 架构 |
 | --- | --- |

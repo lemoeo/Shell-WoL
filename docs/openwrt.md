@@ -38,7 +38,7 @@ free
 
 ## 2. 安装器部署（推荐）
 
-详见 [安装与升级指南](install.md)。先从已发布的 Release 下载 `install.sh`，在路由器上以 root 执行：
+详见 [安装与升级指南](install.md)。从仓库下载 `scripts/install.sh`，在路由器上以 root 执行。程序从 Release 下载，服务模板和校验清单从相同版本的仓库标签下载：
 
 ```sh
 sh install.sh --service

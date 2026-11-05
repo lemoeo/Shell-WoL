@@ -20,6 +20,7 @@ jobs:
           RELEASE_VERSION: ${{ github.ref_name }}
         run: |
           printf '%s\n' "$RELEASE_VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9]+([.-][A-Za-z0-9]+)*)?$'
+      - run: sh scripts/template-checksums.sh --check
       - run: go test -race ./...
       - run: go vet ./...
       - run: python3 tests/installer/test_install.py
@@ -36,8 +37,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ github.ref_name }}
         run: |
+          # Explicit asset list excludes scripts and service templates.
+          assets=(dist/VERSION dist/SHA256SUMS)
+          while read -r digest binary; do
+            assets+=("dist/$binary")
+          done < dist/SHA256SUMS
           if printf '%s' "$RELEASE_VERSION" | grep -q -- '-'; then
-            gh release create "$RELEASE_VERSION" dist/shell-wol-* dist/shell-wol.service dist/shell-wol.openwrt dist/shell-wol.plist dist/install.sh dist/VERSION dist/SHA256SUMS --verify-tag --generate-notes --prerelease
+            gh release create "$RELEASE_VERSION" "${assets[@]}" --verify-tag --generate-notes --prerelease
           else
-            gh release create "$RELEASE_VERSION" dist/shell-wol-* dist/shell-wol.service dist/shell-wol.openwrt dist/shell-wol.plist dist/install.sh dist/VERSION dist/SHA256SUMS --verify-tag --generate-notes
+            gh release create "$RELEASE_VERSION" "${assets[@]}" --verify-tag --generate-notes
           fi

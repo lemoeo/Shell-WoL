@@ -43,8 +43,21 @@ args=sys.argv[1:]
 assert '--proto' in args and args[args.index('--proto')+1]=='=https'
 assert '--proto-redir' in args and args[args.index('--proto-redir')+1]=='=https'
 url=args[-1]; assert url.startswith('https://')
-source=pathlib.Path(os.environ['FIXTURE_ASSETS']) / url.rsplit('/',1)[-1]
-if not source.exists():sys.exit(22)
+root=pathlib.Path(os.environ['FIXTURE_ROOT'])
+with (root/'downloads').open('a') as log:log.write(url+'\n')
+release=os.environ['FIXTURE_RELEASE_BASE'].rstrip('/')+'/'
+repo=os.environ['FIXTURE_REPO_BASE'].rstrip('/')+'/'
+if url.startswith(release):
+ tail=url[len(release):].split('/')
+ if tail==['latest','download','VERSION']:source=root/'assets'/'VERSION'
+ elif len(tail)==3 and tail[0]=='download':source=root/'releases'/tail[1]/tail[2]
+ else:sys.exit(22)
+elif url.startswith(repo):
+ tail=url[len(repo):].split('/')
+ if len(tail)==3 and tail[1]=='deploy':source=root/'repository'/tail[0]/tail[1]/tail[2]
+ else:sys.exit(22)
+else:sys.exit(22)
+if not source.is_file():sys.exit(22)
 shutil.copyfile(source,args[args.index('--output')+1])
 '''
 SYSTEMCTL = r'''#!/bin/sh
@@ -67,12 +80,13 @@ class InstallerTests(unittest.TestCase):
         # The production installer intentionally rejects volatile /tmp roots.
         self.temp = tempfile.TemporaryDirectory(prefix='wol-installer-', dir=REPO.parent)
         self.base = Path(self.temp.name)
-        self.assets = self.base/'assets'; self.assets.mkdir()
+        self.assets = self.base/'assets'
+        self.release_versions=self.base/'releases';self.release_versions.mkdir()
         self.tools = self.base/'tools'; self.tools.mkdir()
         self.root = self.base/'Install With Spaces'
         self.service = self.base/'service'; self.service.mkdir()
         self.env = os.environ.copy()
-        self.env.update(PATH=str(self.tools)+os.pathsep+self.env['PATH'], FIXTURE_ASSETS=str(self.assets), FIXTURE_SERVICE=str(self.service), SHELL_WOL_INSTALL_LIBRARY='1')
+        self.env.update(PATH=str(self.tools)+os.pathsep+self.env['PATH'], FIXTURE_ROOT=str(self.base), FIXTURE_RELEASE_BASE='https://github.com/lemoeo/Shell-WoL/releases', FIXTURE_REPO_BASE='https://raw.githubusercontent.com/lemoeo/Shell-WoL', FIXTURE_SERVICE=str(self.service), SHELL_WOL_INSTALL_LIBRARY='1')
         self.tool('curl', CURL)
         self.tool('systemctl', SYSTEMCTL)
         self.tool('sleep', '#!/bin/sh\nexit 0\n')
@@ -82,13 +96,18 @@ class InstallerTests(unittest.TestCase):
     def tool(self,name,text):
         p=self.tools/name; p.write_text(text);p.chmod(0o755)
     def make_release(self,version):
+        release=self.release_versions/version;release.mkdir(exist_ok=True)
+        if self.assets.is_symlink():self.assets.unlink()
+        self.assets.symlink_to(release,target_is_directory=True)
         (self.assets/'VERSION').write_text(version+'\n')
         p=self.assets/'shell-wol-linux-amd64';p.write_text(BINARY.replace('VERSION_VALUE',version));p.chmod(0o755)
+        self.template_dir=self.base/'repository'/version/'deploy';self.template_dir.mkdir(parents=True,exist_ok=True)
         for name in ('shell-wol.service','shell-wol.openwrt','shell-wol.plist'):
-            shutil.copyfile(REPO/'deploy'/name,self.assets/name)
+            shutil.copyfile(REPO/'deploy'/name,self.template_dir/name)
+        (self.template_dir/'SHA256SUMS').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in sorted(self.template_dir.iterdir()) if p.name!='SHA256SUMS'))
         self.manifest()
     def manifest(self):
-        (self.assets/'SHA256SUMS').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in sorted(self.assets.iterdir()) if p.name!='SHA256SUMS'))
+        (self.assets/'SHA256SUMS').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in sorted(self.assets.glob('shell-wol-*'))))
     def run_install(self,*args,service=False,success=True):
         # Source-only mode permits a fixture service manager without system writes.
         prefix='. "$1"; shift; '
@@ -144,9 +163,9 @@ class InstallerTests(unittest.TestCase):
                 shutil.copyfile(self.assets/'shell-wol-linux-amd64',root/'bin/shell-wol')
                 (root/'bin/shell-wol').chmod(0o755)
                 command='. "$1"; TMP="$2"; ROOT="$3"; SERVICE=systemd; SERVICE_GROUP=fixture; render_service'
-                subprocess.run(['sh','-c',command,'test',str(INSTALLER),str(self.assets),str(root)],env=self.env,check=True)
+                subprocess.run(['sh','-c',command,'test',str(INSTALLER),str(self.template_dir),str(root)],env=self.env,check=True)
                 unit=self.service/'shell-wol.service'
-                shutil.copyfile(self.assets/'rendered-service',unit)
+                shutil.copyfile(self.template_dir/'rendered-service',unit)
                 runtime=self.base/'runtime';runtime.mkdir(exist_ok=True);runtime.chmod(0o700)
                 env=os.environ.copy();env['XDG_RUNTIME_DIR']=str(runtime)
                 result=subprocess.run(['systemd-analyze','--user','verify','--man=no',str(unit)],env=env,text=True,capture_output=True)
@@ -182,9 +201,9 @@ class InstallerTests(unittest.TestCase):
         result=subprocess.check_output(['sh','-c',command,'test',str(INSTALLER),str(fs)],env=self.env,text=True)
         self.assertEqual(result.strip(),'xiaomi')
         command='. "$1"; TMP="$2"; ROOT="/Users/test/Library/Application Support/Shell-WoL"; SERVICE=launchd-user; SERVICE_USER=test; render_service'
-        subprocess.run(['sh','-c',command,'test',str(INSTALLER),str(self.assets)],env=self.env,check=True)
+        subprocess.run(['sh','-c',command,'test',str(INSTALLER),str(self.template_dir)],env=self.env,check=True)
         import plistlib
-        plist=plistlib.loads((self.assets/'rendered-service').read_bytes());self.assertEqual(plist['ProgramArguments'][0],'/Users/test/Library/Application Support/Shell-WoL/bin/shell-wol')
+        plist=plistlib.loads((self.template_dir/'rendered-service').read_bytes());self.assertEqual(plist['ProgramArguments'][0],'/Users/test/Library/Application Support/Shell-WoL/bin/shell-wol')
     def test_invalid_yaml_preserved(self):
         self.run_install();self.ready()
         (self.root/'data/invalid').touch()
@@ -194,16 +213,68 @@ class InstallerTests(unittest.TestCase):
         self.assertTrue((self.root/'data/invalid').exists())
     def test_procd_template_with_spaces(self):
         command='. "$1"; TMP="$2"; ROOT="/data/Install With Spaces"; SERVICE=procd; render_service'
-        subprocess.run(['sh','-c',command,'test',str(INSTALLER),str(self.assets)],env=self.env,check=True)
-        text=(self.assets/'rendered-service').read_text()
+        subprocess.run(['sh','-c',command,'test',str(INSTALLER),str(self.template_dir)],env=self.env,check=True)
+        text=(self.template_dir/'rendered-service').read_text()
         self.assertIn("INSTALL_ROOT='/data/Install With Spaces'",text)
         self.assertNotIn('@ROOT@',text)
-        subprocess.run(['sh','-n',str(self.assets/'rendered-service')],check=True)
+        subprocess.run(['sh','-n',str(self.template_dir/'rendered-service')],check=True)
+    def test_template_downloads_pinned_to_binary_tag(self):
+        self.make_release('v1.2.4')
+        self.run_install('--service','--version','v1.2.3',service=True)
+        requests=(self.base/'downloads').read_text()
+        self.assertIn('/download/v1.2.3/shell-wol-linux-amd64',requests)
+        self.assertIn('/Shell-WoL/v1.2.3/deploy/SHA256SUMS',requests)
+        self.assertIn('/Shell-WoL/v1.2.3/deploy/shell-wol.service',requests)
+        self.assertNotIn('/main/',requests)
+        self.assertNotIn('/v1.2.4/',requests)
+    def test_template_corruption_preserves_existing_install(self):
+        self.run_install('--service',service=True)
+        binary=(self.root/'bin/shell-wol').read_bytes()
+        unit=(self.service/'shell-wol.service').read_bytes()
+        self.make_release('v1.2.4')
+        p=self.template_dir/'shell-wol.service';p.write_text(p.read_text()+'# corrupt\n')
+        self.run_install(service=True,success=False)
+        self.assertEqual((self.root/'bin/shell-wol').read_bytes(),binary)
+        self.assertEqual((self.service/'shell-wol.service').read_bytes(),unit)
+    def test_missing_tag_manifest_has_no_main_fallback(self):
+        (self.template_dir/'SHA256SUMS').unlink()
+        result=self.run_install('--service',service=True,success=False)
+        self.assertIn('不会回退到 main',result.stderr)
+        self.assertFalse(self.root.exists())
+        self.assertNotIn('/main/',(self.base/'downloads').read_text())
+    def test_missing_tag_template_has_no_release_fallback(self):
+        (self.template_dir/'shell-wol.service').unlink()
+        self.run_install('--service',service=True,success=False)
+        self.assertNotIn('/download/v1.2.3/shell-wol.service',(self.base/'downloads').read_text())
+    def test_separate_mirror_addresses(self):
+        self.env['FIXTURE_RELEASE_BASE']='https://release.example/releases'
+        self.env['FIXTURE_REPO_BASE']='https://repo.example/raw/lemoeo/Shell-WoL'
+        self.run_install('--service','--download-base',self.env['FIXTURE_RELEASE_BASE']+'/',
+                         '--repo-base',self.env['FIXTURE_REPO_BASE']+'/',service=True)
+        requests=(self.base/'downloads').read_text()
+        self.assertIn('https://release.example/releases/download/v1.2.3/',requests)
+        self.assertIn('https://repo.example/raw/lemoeo/Shell-WoL/v1.2.3/deploy/',requests)
+    def test_old_release_extra_assets_are_ignored(self):
+        p=self.assets/'SHA256SUMS';p.write_text(p.read_text()+'0'*64+'  shell-wol.service\n')
+        self.run_install('--service',service=True)
+        self.assertNotIn('/download/v1.2.3/shell-wol.service',(self.base/'downloads').read_text())
+    def test_template_checksum_helper_detects_stale_manifest(self):
+        project=self.base/'project';(project/'scripts').mkdir(parents=True);(project/'deploy').mkdir()
+        helper=project/'scripts/template-checksums.sh';shutil.copyfile(REPO/'scripts/template-checksums.sh',helper)
+        for name in ('shell-wol.service','shell-wol.openwrt','shell-wol.plist','SHA256SUMS'):
+            shutil.copyfile(REPO/'deploy'/name,project/'deploy'/name)
+        subprocess.run(['sh',str(helper),'--check'],check=True)
+        p=project/'deploy/shell-wol.service';p.write_text(p.read_text()+'# changed\n')
+        result=subprocess.run(['sh',str(helper),'--check'],capture_output=True)
+        self.assertNotEqual(result.returncode,0)
+        subprocess.run(['sh',str(helper)],check=True)
+        subprocess.run(['sh',str(helper),'--check'],check=True)
     def test_invalid_paths_and_arch(self):
         for argument in ('unknown','386'):
             self.run_install('--arch',argument,success=False)
         self.run_install('--install-dir','/tmp/shell-wol',success=False)
         self.run_install('--install-dir',str(self.root)+'\n/evil',success=False)
         self.run_install('--version','v1.2.3\nv1.2.4',success=False)
+        self.run_install('--repo-base','http://insecure.example',success=False)
 
 if __name__=='__main__':unittest.main(verbosity=2)

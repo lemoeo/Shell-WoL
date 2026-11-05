@@ -4,6 +4,7 @@ set -eu
 
 REPO=lemoeo/Shell-WoL
 DOWNLOAD_BASE=https://github.com/$REPO/releases
+REPO_BASE=https://raw.githubusercontent.com/$REPO
 VERSION=latest
 ARCH=
 INSTALL_DIR=
@@ -35,6 +36,7 @@ Shell-WoL 安装器
   --service            注册后台服务；已有服务升级时自动保留
   --yes                接受已确定的默认选项，不猜测未知架构或覆盖冲突
   --download-base URL  HTTPS Release 地址，默认 GitHub Releases
+  --repo-base URL      HTTPS 仓库根地址（不含标签），默认 GitHub raw
   --help               显示帮助
 安装器不接收密码，不修改 LAN 监听、防火墙或厂商启动钩子。
 HELP
@@ -95,7 +97,7 @@ fetch() {
 }
 verify_asset() {
     asset=$1
-    expected=$(awk -v name="$asset" '$2 == name {print $1}' "$TMP/SHA256SUMS")
+    expected=$(awk -v name="$asset" '$2 == name {print $1}' "${2:-$TMP/SHA256SUMS}")
     [ "$(printf '%s\n' "$expected" | wc -l | tr -d ' ')" = 1 ] || fail "校验项重复：$asset"
     printf '%s\n' "$expected" | LC_ALL=C grep -Eq '^[0-9a-f]{64}$' || fail "缺少或无效的校验项：$asset"
     actual=$(checksum "$TMP/$asset") || fail 'SHA256 计算失败'
@@ -245,9 +247,9 @@ main() {
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --help|-h) usage; return ;;
-            --version|--arch|--install-dir|--download-base)
+            --version|--arch|--install-dir|--download-base|--repo-base)
                 [ "$#" -ge 2 ] || fail "$1 缺少参数"
-                case "$1" in --version) VERSION=$2 ;; --arch) ARCH=$2 ;; --install-dir) INSTALL_DIR=$2 ;; --download-base) DOWNLOAD_BASE=$2 ;; esac; shift 2 ;;
+                case "$1" in --version) VERSION=$2 ;; --arch) ARCH=$2 ;; --install-dir) INSTALL_DIR=$2 ;; --download-base) DOWNLOAD_BASE=$2 ;; --repo-base) REPO_BASE=$2 ;; esac; shift 2 ;;
             --user) USER_MODE=1; shift ;;
             --service) WANT_SERVICE=1; shift ;;
             --yes|-y) ASSUME_YES=1; shift ;;
@@ -260,6 +262,8 @@ main() {
     if [ "$OS" = darwin ]; then case "$ARCH" in amd64|arm64) ;; *) fail 'macOS 仅支持 amd64/arm64' ;; esac; fi
     if [ "$VERSION" != latest ]; then valid_version "$VERSION" || fail '版本格式须为 v主版本.次版本.补丁[-预发布标识]'; fi
     case "$DOWNLOAD_BASE" in https://*) ;; *) fail '--download-base 必须是 HTTPS 地址' ;; esac
+    case "$REPO_BASE" in https://*) ;; *) fail '--repo-base 必须是 HTTPS 地址' ;; esac
+    DOWNLOAD_BASE=${DOWNLOAD_BASE%/}; REPO_BASE=${REPO_BASE%/}
     if [ "$OS" = darwin ] && [ "$(id -u)" != 0 ]; then USER_MODE=1; fi
     if [ -z "$INSTALL_DIR" ]; then
         if [ "$USER_MODE" = 1 ]; then
@@ -327,7 +331,12 @@ main() {
     [ "$("$TMP/$artifact" version)" = "$VERSION" ] || fail '二进制无法运行或版本不匹配'
     if [ "$SERVICE" != none ]; then
         case "$SERVICE" in systemd) template=shell-wol.service ;; procd) template=shell-wol.openwrt ;; *) template=shell-wol.plist ;; esac
-        fetch "$release_url/$template" "$TMP/$template" || fail '服务模板下载失败'; verify_asset "$template"
+        # Templates and their manifest must come from the binary's exact tag.
+        # Never mix main's templates into an older binary release.
+        template_url=$REPO_BASE/$VERSION/deploy
+        fetch "$template_url/SHA256SUMS" "$TMP/template-SHA256SUMS" || fail "无法获取 $VERSION 标签的模板校验清单；请检查仓库地址和标签，不会回退到 main"
+        fetch "$template_url/$template" "$TMP/$template" || fail "无法获取 $VERSION 标签的服务模板，不会回退到 main"
+        verify_asset "$template" "$TMP/template-SHA256SUMS"
     fi
     existing=$ROOT
     while [ ! -d "$existing" ]; do existing=$(dirname "$existing"); done

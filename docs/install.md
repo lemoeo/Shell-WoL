@@ -4,16 +4,31 @@
 
 ## 发布前提与安装入口
 
-维护者推送 `v主版本.次版本.补丁` 标签后，GitHub Actions 执行测试、交叉编译并发布 Release。预发布标签可使用 `v0.1.0-beta.1`，会标记为 prerelease。安装器、二进制、服务模板、VERSION 和 SHA256SUMS 一起发布；仅推送源码不会自动发布安装包。项目尚无 Release 时，线上安装入口暂不可用，可先使用本地构建。
+维护者推送 `v主版本.次版本.补丁` 标签后，GitHub Actions 执行测试、交叉编译并发布 Release。预发布标签可使用 `v0.1.0-beta.1`，会标记为 prerelease。Release 只上传各平台二进制、VERSION 和二进制 SHA256SUMS。安装脚本和三份服务模板保留在仓库，不作为 Release 附件；仅推送源码不会自动发布二进制。没有 Release 时，可先使用本地构建。
 
-从最新正式 Release 下载安装器，查看后运行：
+从仓库 main 分支下载最新安装入口，查看后运行：
 
 ```sh
 curl --fail --location --proto '=https' --proto-redir '=https' \
-  https://github.com/lemoeo/Shell-WoL/releases/latest/download/install.sh \
+  https://raw.githubusercontent.com/lemoeo/Shell-WoL/main/scripts/install.sh \
   --output install.sh
 sh install.sh
 ```
+
+需要完全固定安装流程时，从 `https://raw.githubusercontent.com/lemoeo/Shell-WoL/<版本标签>/scripts/install.sh` 下载配套入口，并传 `--version <版本标签>`。入口脚本从 main 下载，并不意味着服务模板也从 main 下载。
+
+文件来源如下：
+
+| 内容 | 默认来源 |
+| --- | --- |
+| 安装入口 | 仓库 main 的 `scripts/install.sh`，也可固定标签 |
+| 最新正式版本信息 | Release 的 `latest/download/VERSION` |
+| 二进制及其 SHA256SUMS | Release 的 `download/<版本>/` |
+| 服务模板及其 SHA256SUMS | 仓库的 `<同版本标签>/deploy/` |
+
+首次解析 latest 后，二进制与模板全部固定到同一版本；不允许把新 main 的模板静默用于旧二进制。下载模板或其摘要失败就停止，不回退到 main 或 Release 中的旧模板。
+
+旧 Release 已上传的脚本和模板无需删除。**旧标签如果没有 `deploy/SHA256SUMS`，新安装器无法为该版本自动安装服务**；可使用原配套安装方式，或不加 `--service` 只安装程序并手动运行。已有受管理服务的升级会保留服务类型，因此也需要选择包含模板清单的新标签。不要移动旧标签来补文件；应提交文件并发布新版本。
 
 支持有证书校验及 `--https-only` 的 wget；精简 BusyBox wget 不一定具备这些能力，遇到提示应先通过固件支持的方式安装 curl 和 CA 证书，不能跳过 TLS 校验。
 
@@ -54,7 +69,21 @@ sh install.sh --user --install-dir "$HOME/Apps/shell-wol" --yes
 sh install.sh --arch mipsle --service --yes
 ```
 
-支持参数：`--version`、`--arch`、`--install-dir`、`--user`、`--service`、`--yes`、`--download-base` 和 `--help`。`--download-base` 仅接受 HTTPS Release 根地址，镜像需保持 `latest/download/VERSION` 和 `download/<版本>/<资产名>` 结构；同一固定版本内资产不得随意替换。首次解析 latest 后所有资产均按固定版本下载。
+支持参数：`--version`、`--arch`、`--install-dir`、`--user`、`--service`、`--yes`、`--download-base`、`--repo-base` 和 `--help`。
+
+- `--download-base` 是 HTTPS Release 根地址，镜像保持 `latest/download/VERSION` 和 `download/<版本>/<资产名>` 结构。
+- `--repo-base` 是 HTTPS 仓库文件根地址，不包含分支或标签；镜像保持 `<版本标签>/deploy/SHA256SUMS` 和 `<版本标签>/deploy/<模板名>` 结构。
+- 两类地址独立配置，不会用 Release 镜像地址推断仓库镜像。模板仍固定到二进制版本标签；同一版本的内容不应随意替换。
+
+例如：
+
+```sh
+sh install.sh --version v0.1.0 \
+  --download-base https://release.example/releases \
+  --repo-base https://repo.example/raw/lemoeo/Shell-WoL
+```
+
+以上镜像域名仅为结构示例，使用时替换为实际服务。
 
 路径支持 ASCII 英文、数字、空格和 `_ . / + ~ -`，须为绝对路径；不支持非 ASCII 路径、符号链接路径、控制字符、`.`/`..` 路径段或临时根目录。目录不应有其他用户的写权限。`--yes` 不会跳过校验、不确定架构、目录冲突或未知服务机制；Linux 用户模式暂不自动注册后台服务。
 
@@ -110,7 +139,7 @@ sudo cat "/Library/Application Support/Shell-WoL/data/service.log"
 
 再次运行安装器可升级；已有安装的服务类型会自动保留，不需要再次传 `--service`。
 
-- 下载、SHA256 和版本运行检查在替换程序前完成；服务模板也验证摘要。
+- 下载、SHA256 和版本运行检查在替换程序前完成；服务模板根据同版本仓库中的 `deploy/SHA256SUMS` 验证摘要，和 Release 的二进制校验清单分开处理。
 - 升级前只读校验已有 YAML，停止本安装管理的服务，再检查运行锁。安装器不会删除 `data/.lock`。
 - 程序替换后保留旧程序为 `backup/shell-wol.previous`，已有 YAML 不改写、不重置密码。
 - 启动服务后会实际请求配置地址的 `/api/session`，未初始化时也应正常响应；仅有进程或服务状态不足以通过就绪检查。
@@ -133,4 +162,14 @@ go build -ldflags='-X main.version=v0.0.0-test' -o bin/shell-wol-install-test ./
 python3 tests/installer/smoke_native.py bin/shell-wol-install-test
 ```
 
-Release 工作流仅在推送版本标签时运行；准备好版本后再推送标签。上述本地命令只生成文件，不发布。`dist/` 包含二进制、install.sh、服务模板、VERSION、SHA256SUMS；构建脚本兼容 sha256sum 与 macOS shasum。
+Release 工作流仅在推送版本标签时运行；准备好版本后再推送标签。上述本地命令只生成文件，不发布。`dist/` 只包含二进制、VERSION、SHA256SUMS；Release 的 SHA256SUMS 仅列出二进制。构建脚本会清理旧版生成的 install.sh 与三份模板副本，不删除其他用户文件。校验工具兼容 sha256sum 与 macOS shasum。
+
+
+服务模板修改后必须运行：
+
+```sh
+sh scripts/template-checksums.sh
+sh scripts/template-checksums.sh --check
+```
+
+将模板与 `deploy/SHA256SUMS` 一起提交，再创建版本标签。Tests、Release 工作流和构建脚本都会检查该清单；摘要过期会导致检查失败。不要在 Release 工作流中自动覆盖仓库清单来绕过检查。
