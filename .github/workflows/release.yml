@@ -23,6 +23,7 @@ jobs:
       - run: sh scripts/template-checksums.sh --check
       - run: go test -race ./...
       - run: go vet ./...
+      - run: node tests/web/request.test.cjs
       - run: python3 -m unittest discover -s tests/installer -p 'test_*.py' -v
       - name: Native installer integration
         run: |

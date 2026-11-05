@@ -93,6 +93,8 @@ Windows 将程序名换为 `shell-wol.exe`。直接运行 `serve` 会创建 `dat
 
 CLI 从 YAML 读取默认值与设备的原子快照，不持有写锁，不修改历史；结果输出到终端。Web 操作写入 `events.yaml`。重复次数范围 1–10，发送间隔 100ms。Web 的唤醒与检测共用每分钟 60 次的操作额度，登录和初始化共用每分钟 10 次额度；均为单进程全局限制。
 
+Web 前端每个请求最多等待 10 秒，包含响应内容读取和 YAML 导出。超时或断网后恢复按钮，不自动重试；唤醒结果可能已执行，应先检查设备状态。批量唤醒逐台计时，遇到连接失败或超时会停止后续发送。浏览器后台休眠可能延后计时器执行。
+
 **“唤醒包已发送”不等于“开机成功”**：WoL 无标准回执。检测需配置目标 IP 和真实开放的 TCP 端口，例如 SSH 22 或 RDP 3389。检测成功表示端口可达；未响应不代表已关机，也可能是防火墙或服务尚未启动。
 
 ## YAML 数据
@@ -148,10 +150,13 @@ OpenWrt/二次开发固件需保留 rc.common/procd 才能使用对应服务模�
 ```sh
 go test -race ./...
 go vet ./...
+node tests/web/request.test.cjs
 python3 -m unittest discover -s tests/installer -p 'test_*.py' -v
 sh scripts/template-checksums.sh --check
 ./scripts/build.sh
 ```
+
+前端请求测试使用 Node.js 18+ 的内置测试运行器，仅用于开发验证，不影响目标设备的单文件部署。
 
 构建默认 `CGO_ENABLED=0`，`dist/` 仅输出二进制、VERSION 和二进制 SHA256SUMS。安装器位于仓库 `scripts/install.sh`；服务模板与 `deploy/SHA256SUMS` 从所选二进制版本对应的仓库标签下载，不混用 `main` 模板。推送合法版本标签可触发 [Release 工作流](.github/workflows/release.yml)，发布步骤见 [安装指南](docs/install.md)。构建目标：
 
