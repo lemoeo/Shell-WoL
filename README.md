@@ -154,6 +154,8 @@ OpenWrt/二次开发固件需保留 rc.common/procd 才能使用对应服务模�
 
 ## 构建与验证
 
+另有独立的 [Mac 屏幕共享分阶段验证工具](docs/mac-vnc-probe.md)，用于测试 TCP 连接、DH 用户名密码认证及共享会话初始化分别是否触发 Mac 亮屏。它不接入现有唤醒按钮；构建和实机测试方法见该文档。
+
 ```sh
 go test -race ./...
 go vet ./...

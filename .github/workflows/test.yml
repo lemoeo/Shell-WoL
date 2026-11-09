@@ -17,6 +17,10 @@ jobs:
       - run: sh scripts/template-checksums.sh --check
       - run: go test -race ./...
       - run: go vet ./...
+      - name: VNC probe terminal smoke test
+        run: |
+          go build -o "$RUNNER_TEMP/mac-vnc-probe" ./cmd/mac-vnc-probe
+          python3 tests/vnc_probe/smoke_terminal.py "$RUNNER_TEMP/mac-vnc-probe"
       - run: node tests/web/request.test.cjs
       - run: python3 -m unittest discover -s tests/installer -p 'test_*.py' -v
       - name: Native installer integration
