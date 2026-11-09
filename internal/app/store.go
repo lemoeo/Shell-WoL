@@ -107,19 +107,36 @@ func (s *Store) Config() Config {
 func (s *Store) Devices() []Device {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return append([]Device{}, s.devices...)
+	list := append([]Device{}, s.devices...)
+	credentials, _ := readCredentials(s.dir)
+	for i := range list {
+		r, ok := credentials.Credentials[list[i].ID]
+		list[i].PasswordConfigured = ok && r.Binding == credentialBinding(list[i])
+	}
+	return list
 }
 func (s *Store) Get(id string) (Device, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, d := range s.devices {
 		if d.ID == id {
+			c, _ := readCredentials(s.dir)
+			r, ok := c.Credentials[d.ID]
+			d.PasswordConfigured = ok && r.Binding == credentialBinding(d)
 			return d, true
 		}
 	}
 	return Device{}, false
 }
 func (s *Store) SaveDevice(d Device, create bool) error {
+	return s.SaveDeviceCredentials(d, create, nil, false)
+}
+
+func (s *Store) SaveDeviceCredentials(d Device, create bool, password []byte, clearPassword bool) error {
+	if clearPassword && len(password) > 0 {
+		return errors.New("不能同时清除和设置密码")
+	}
+	d.PasswordConfigured = false
 	if err := d.Validate(); err != nil {
 		return err
 	}
@@ -147,7 +164,46 @@ func (s *Store) SaveDevice(d Device, create bool) error {
 	} else {
 		list[index] = d
 	}
-	return s.saveDevices(list)
+	credentials, err := readCredentials(s.dir)
+	if err != nil {
+		return err
+	}
+	prior := credentialFile{Version: 1, Credentials: map[string]credentialRecord{}}
+	for id, r := range credentials.Credentials {
+		prior.Credentials[id] = r
+	}
+	record, configured := credentials.Credentials[d.ID]
+	changed := clearPassword || len(password) > 0 || (configured && record.Binding != credentialBinding(d))
+	if configured && record.Binding != credentialBinding(d) && d.UsesVNC() && !clearPassword && len(password) == 0 {
+		return errors.New("目标 IP、端口或用户名已改变，请重新设置 Mac VNC 密码")
+	}
+	if d.UsesVNC() && !configured && len(password) == 0 && !clearPassword {
+		return errors.New("请设置 Mac VNC 密码")
+	}
+	if len(password) > 0 {
+		if !d.UsesVNC() {
+			return errors.New("请先选择 Mac VNC 唤醒方式")
+		}
+		if err = setCredential(s.dir, &credentials, d, password); err != nil {
+			return err
+		}
+	} else if changed {
+		delete(credentials.Credentials, d.ID)
+	}
+	if changed {
+		if err = saveCredentials(s.dir, credentials); err != nil {
+			return err
+		}
+	}
+	if err = s.saveDevices(list); err != nil {
+		if changed {
+			if rollback := saveCredentials(s.dir, prior); rollback != nil {
+				return errors.New("设备保存失败且凭据恢复失败，请检查数据目录")
+			}
+		}
+		return err
+	}
+	return nil
 }
 func (s *Store) DeleteDevice(id string) error {
 	s.mu.Lock()
@@ -156,7 +212,27 @@ func (s *Store) DeleteDevice(id string) error {
 		if d.ID == id {
 			list := append([]Device{}, s.devices[:i]...)
 			list = append(list, s.devices[i+1:]...)
-			return s.saveDevices(list)
+			c, err := readCredentials(s.dir)
+			if err != nil {
+				return err
+			}
+			old, exists := c.Credentials[id]
+			if exists {
+				delete(c.Credentials, id)
+				if err = saveCredentials(s.dir, c); err != nil {
+					return err
+				}
+			}
+			if err = s.saveDevices(list); err != nil {
+				if exists {
+					c.Credentials[id] = old
+					if rollback := saveCredentials(s.dir, c); rollback != nil {
+						return errors.New("删除失败且凭据恢复失败，请检查数据目录")
+					}
+				}
+				return err
+			}
+			return nil
 		}
 	}
 	return errors.New("设备不存在")
@@ -232,7 +308,7 @@ func (s *Store) Record(e Event) error {
 func (s *Store) Export() ([]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return yaml.Marshal(s.devicesDoc)
+	return yaml.Marshal(deviceFile{Devices: s.devices})
 }
 
 // ReadWakeDefaults reads atomic snapshots without taking the writer lock, so CLI
@@ -263,3 +339,21 @@ func ReadWakeDefaults(dir, id string) (Config, Device, error) {
 	}
 	return c, Device{}, errors.New("设备不存在")
 }
+
+func (s *Store) WakeSnapshot(id string) (Device, []byte, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, d := range s.devices {
+		if d.ID == id {
+			if !d.UsesVNC() {
+				return d, nil, nil
+			}
+			p, e := readDevicePassword(s.dir, d)
+			return d, p, e
+		}
+	}
+	return Device{}, nil, errors.New("设备不存在")
+}
+
+// CLI reads atomic files without opening another writer store.
+func ReadDevicePassword(dir string, d Device) ([]byte, error) { return readDevicePassword(dir, d) }

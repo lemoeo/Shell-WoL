@@ -120,3 +120,43 @@ test('batch timeout stops remaining devices and restores its button', async () =
   assert.equal(f.calls.length, 1); assert.equal(f.node('#batch').disabled, false);
   assert.match(f.node('#notice').textContent, /剩余 1 台未发送/);
 });
+
+test('Mac wake polls its task and deduplicates clicks without retrying auth', async () => {
+  const f = await fixture(); let polls = 0;
+  f.fetch(async (url, options) => {
+    if (options.method === 'POST') return response({ job_id: 'job-one' }, 202);
+    polls++;
+    return response(polls === 1 ? { state: 'running', progress: '认证成功，正在保持连接' } : { state: 'done', progress: '已完成', result: { message: 'VNC 认证成功' } });
+  });
+  f.run("devices=[{id:'mac',name:'Mac',wake_method:'mac_vnc'}]; pendingMac=wakeDevice(devices[0])");
+  const pending = f.run('pendingMac');
+  assert.equal(f.run('wakeDevice(devices[0])'), pending);
+  await flush(); assert.equal(f.run("wakeStates.get('mac').busy"), true);
+  f.advance(1000); const result = await pending;
+  assert.equal(result.message, 'VNC 认证成功');
+  assert.equal(f.calls.filter(([, o]) => o.method === 'POST').length, 1);
+  assert.equal(f.run("wakeStates.get('mac').busy"), false);
+});
+
+test('lost task query resumes the known job without sending another wake', async () => {
+  const f = await fixture(); let fail = true;
+  f.fetch(async (_, options) => {
+    if (options.method === 'POST') return response({ job_id: 'job-two' }, 202);
+    if (fail) throw new TypeError('connection lost');
+    return response({ state: 'done', progress: '已完成', result: { message: 'VNC 认证成功' } });
+  });
+  f.run("devices=[{id:'mac',name:'Mac',wake_method:'mac_vnc'}]");
+  await assert.rejects(f.run('wakeDevice(devices[0])'), e => e.code === 'network');
+  fail = false; await f.run('wakeDevice(devices[0])');
+  assert.equal(f.calls.filter(([, o]) => o.method === 'POST').length, 1);
+});
+
+test('active job from reload resumes once and allows a later explicit wake', async () => {
+  const f = await fixture();
+  f.fetch(async (_, options) => options.method === 'POST' ? response({ message: 'sent' }) : response({ state: 'done', result: { message: 'completed' } }));
+  f.run("devices=[{id:'mac',name:'Mac',active_job_id:'old-job'}]");
+  await f.run('wakeDevice(devices[0])');
+  assert.equal(f.calls.filter(([, o]) => o.method === 'POST').length, 0);
+  await f.run('wakeDevice(devices[0])');
+  assert.equal(f.calls.filter(([, o]) => o.method === 'POST').length, 1);
+});

@@ -29,6 +29,7 @@ type session struct {
 	expires time.Time
 }
 type Server struct {
+	jobs           *wakeJobs
 	store          *Store
 	setupToken     string
 	mu             sync.Mutex
@@ -55,9 +56,10 @@ func NewServer(s *Store) *Server {
 	return &Server{
 		store: s, setupToken: randomToken(), sessions: map[string]session{},
 		loginLimit: newSourceLimiter(10), setupLimit: newSourceLimiter(5),
-		passwordWork: make(chan struct{}, 2), trustedProxies: proxies,
+		passwordWork: make(chan struct{}, 2), trustedProxies: proxies, jobs: newWakeJobs(),
 	}
 }
+func (s *Server) Close()             { s.jobs.close() }
 func (s *Server) SetupToken() string { return s.setupToken }
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -65,12 +67,31 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/setup", s.setup)
 	mux.HandleFunc("POST /api/login", s.login)
 	mux.HandleFunc("POST /api/logout", s.protect(s.logout))
-	mux.HandleFunc("GET /api/devices", s.protect(func(w http.ResponseWriter, r *http.Request) { respond(w, 200, s.store.Devices()) }))
+	mux.HandleFunc("GET /api/devices", s.protect(func(w http.ResponseWriter, r *http.Request) {
+		devices := s.store.Devices()
+		type view struct {
+			Device
+			ActiveJobID string `json:"active_job_id,omitempty"`
+		}
+		list := make([]view, 0, len(devices))
+		for _, d := range devices {
+			list = append(list, view{d, s.jobs.activeID(d.ID)})
+		}
+		respond(w, 200, list)
+	}))
 	mux.HandleFunc("POST /api/devices", s.protect(s.createDevice))
 	mux.HandleFunc("PUT /api/devices/{id}", s.protect(s.updateDevice))
 	mux.HandleFunc("DELETE /api/devices/{id}", s.protect(s.deleteDevice))
 	mux.HandleFunc("POST /api/devices/{id}/wake", s.protect(s.wake))
 	mux.HandleFunc("POST /api/devices/{id}/probe", s.protect(s.probe))
+	mux.HandleFunc("GET /api/wake-jobs/{id}", s.protect(func(w http.ResponseWriter, r *http.Request) {
+		job, ok := s.jobs.get(r.PathValue("id"))
+		if !ok {
+			apiError(w, 404, errors.New("任务不存在或已过期"))
+			return
+		}
+		respond(w, 200, job)
+	}))
 	mux.HandleFunc("GET /api/events", s.protect(func(w http.ResponseWriter, r *http.Request) { respond(w, 200, s.store.Events()) }))
 	mux.HandleFunc("GET /api/networks", s.protect(func(w http.ResponseWriter, r *http.Request) {
 		v, e := Networks()
@@ -308,22 +329,34 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{Name: "wol_session", Value: "", Path: "/", HttpOnly: true, Secure: r.TLS != nil || strings.HasPrefix(s.store.Config().PublicURL, "https://"), SameSite: http.SameSiteStrictMode, MaxAge: -1})
 	respond(w, 200, map[string]bool{"ok": true})
 }
+
+type deviceInput struct {
+	Device
+	VNCPassword      string `json:"vnc_password"`
+	ClearVNCPassword bool   `json:"clear_vnc_password"`
+}
+
 func (s *Server) createDevice(w http.ResponseWriter, r *http.Request) {
-	var d Device
+	var d deviceInput
 	if !decode(w, r, &d) {
 		return
 	}
 	if d.ID == "" {
 		d.ID = randomToken()[:16]
 	}
-	if e := s.store.SaveDevice(d, true); e != nil {
+	if e := s.store.SaveDeviceCredentials(d.Device, true, []byte(d.VNCPassword), d.ClearVNCPassword); e != nil {
 		apiError(w, 400, e)
 		return
 	}
-	respond(w, 201, d)
+	saved, _ := s.store.Get(d.ID)
+	respond(w, 201, saved)
 }
 func (s *Server) updateDevice(w http.ResponseWriter, r *http.Request) {
-	var d Device
+	if s.jobs.activeID(r.PathValue("id")) != "" {
+		apiError(w, 409, errors.New("设备唤醒任务执行中，请完成后再编辑"))
+		return
+	}
+	var d deviceInput
 	if !decode(w, r, &d) {
 		return
 	}
@@ -332,14 +365,25 @@ func (s *Server) updateDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.ID = r.PathValue("id")
-	if e := s.store.SaveDevice(d, false); e != nil {
-		apiError(w, 400, e)
+	if e := s.jobs.withIdleDevice(d.ID, func() error {
+		return s.store.SaveDeviceCredentials(d.Device, false, []byte(d.VNCPassword), d.ClearVNCPassword)
+	}); e != nil {
+		code := 400
+		if errors.Is(e, errDeviceBusy) {
+			code = 409
+		}
+		apiError(w, code, e)
 		return
 	}
-	respond(w, 200, d)
+	saved, _ := s.store.Get(d.ID)
+	respond(w, 200, saved)
 }
 func (s *Server) deleteDevice(w http.ResponseWriter, r *http.Request) {
-	if e := s.store.DeleteDevice(r.PathValue("id")); e != nil {
+	if s.jobs.activeID(r.PathValue("id")) != "" {
+		apiError(w, 409, errors.New("设备唤醒任务执行中，请完成后再删除"))
+		return
+	}
+	if e := s.jobs.withIdleDevice(r.PathValue("id"), func() error { return s.store.DeleteDevice(r.PathValue("id")) }); e != nil {
 		apiError(w, 404, e)
 		return
 	}
@@ -358,6 +402,20 @@ func (s *Server) wake(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.wakeRate(w) {
+		return
+	}
+	if d.UsesVNC() {
+		job, err := s.jobs.submit(s.store, d.ID)
+		if err != nil {
+			code := 400
+			if errors.Is(err, errJobsBusy) {
+				code = 503
+				w.Header().Set("Retry-After", "1")
+			}
+			apiError(w, code, err)
+			return
+		}
+		respond(w, 202, map[string]any{"job_id": job.ID, "message": "唤醒任务已创建"})
 		return
 	}
 	e := Wake(r.Context(), d)

@@ -50,7 +50,7 @@ sh install.sh
 ```text
 安装根目录/
 ├── bin/shell-wol
-├── data/                 YAML 数据；初始化后默认私有权限
+├── data/                 YAML 数据及凭据密钥；初始化后默认私有权限
 ├── backup/shell-wol.previous
 └── .shell-wol-install    安装器版本、服务及服务文件摘要
 ```
@@ -228,3 +228,7 @@ sh scripts/template-checksums.sh --check
 ```
 
 将模板与 `deploy/SHA256SUMS` 一起提交，再创建版本标签。Tests、Release 工作流和构建脚本都会检查该清单；摘要过期会导致检查失败。不要在 Release 工作流中自动覆盖仓库清单来绕过检查。
+
+## Mac VNC 凭据
+
+启用 Mac 唤醒后，数据目录还包含加密的 `credentials.yaml` 与本机密钥 `credentials.key`。升级和默认卸载保留两者；`--purge` 将两者列入预览并删除。备份必须保护完整数据目录及对应文件权限，缺少密钥无法恢复密码。配置与只写密码行为见 [Mac VNC 唤醒指南](mac-vnc-wake.md)。

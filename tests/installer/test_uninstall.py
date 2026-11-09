@@ -67,6 +67,8 @@ class UninstallTests(unittest.TestCase):
     def test_default_keeps_data_and_reinstall(self):
         self.install(service=True)
         data=self.root/'data';(data/'devices.yaml').write_text('devices: []\n# preserve\n')
+        (data/'credentials.yaml').write_text('version: 1\ncredentials: {}\n')
+        (data/'credentials.key').write_bytes(b'K'*32)
         before={p.name:p.read_bytes() for p in data.iterdir()}
         self.uninstall()
         self.assertFalse((self.root/'bin/shell-wol').exists())
@@ -80,7 +82,7 @@ class UninstallTests(unittest.TestCase):
         self.assertTrue((self.service/'active').exists())
     def test_purge_removes_known_files_and_root(self):
         self.install(service=True)
-        for name in ('events.yaml','service.log','service.err.log'):(self.root/'data'/name).write_text('test\n')
+        for name in ('events.yaml','credentials.yaml','credentials.key','service.log','service.err.log'):(self.root/'data'/name).write_text('test\n')
         (self.root/'backup').mkdir(exist_ok=True);(self.root/'backup/shell-wol.previous').write_text('old')
         self.uninstall('--purge');self.assertFalse(self.root.exists())
         self.uninstall('--purge')
@@ -181,6 +183,16 @@ class UninstallTests(unittest.TestCase):
         self.install();outside=self.fixture.base/'outside';outside.write_text('outside')
         p=self.root/'data/config.yaml';p.unlink();p.symlink_to(outside)
         self.uninstall('--purge',success=False);self.assertEqual(outside.read_text(),'outside')
+    def test_credential_symlinks_are_not_followed_for_purge(self):
+        for name in ('credentials.yaml', 'credentials.key'):
+            with self.subTest(name=name):
+                self.install()
+                outside=self.fixture.base/('outside-'+name);outside.write_text('private outside fixture')
+                link=self.root/'data'/name;link.symlink_to(outside)
+                self.uninstall('--purge',success=False)
+                self.assertEqual(outside.read_text(),'private outside fixture')
+                self.assertTrue(link.is_symlink())
+                link.unlink();self.uninstall('--purge')
     def test_invalid_root_paths_are_rejected(self):
         for root in ('/', '///', '/opt', '/etc', str(self.root)+'/../other'):
             with self.subTest(root=root):self.uninstall('--install-dir',root,success=False)

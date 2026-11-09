@@ -24,6 +24,9 @@ func MagicPacket(mac string) ([]byte, error) {
 	return p, nil
 }
 func Wake(ctx context.Context, d Device) error {
+	// This is the UDP component, including when called by a combined wake.
+	// Validate its required fields even if the caller supplied a VNC-only device.
+	d.WakeMethod = "wol"
 	if err := d.Validate(); err != nil {
 		return err
 	}

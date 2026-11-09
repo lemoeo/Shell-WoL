@@ -470,3 +470,41 @@ func TestWriteFullHandlesPartialWrites(t *testing.T) {
 		t.Fatalf("partial write: %q %v", w.String(), err)
 	}
 }
+
+func TestAuthenticationDeadlineIsSeparateFromHold(t *testing.T) {
+	c := testConfig()
+	expected := c
+	c.AuthTimeout = time.Second
+	c.Hold = 1100 * time.Millisecond
+	c.Timeout = 3 * time.Second
+	host, port, finish := fakeServer(t, func(conn net.Conn) error {
+		if err := authenticateFake(conn, expected, 8, 0); err != nil {
+			return err
+		}
+		return expectEOF(conn)
+	})
+	c.Host, c.Port = host, port
+	var phases []Phase
+	c.Progress = func(p Phase) { phases = append(phases, p) }
+	if err := Run(context.Background(), c, nil); err != nil {
+		t.Fatal("authentication deadline truncated hold", err)
+	}
+	finish()
+	if len(phases) != 3 || phases[0] != Connecting || phases[1] != Authenticating || phases[2] != Holding {
+		t.Fatal(phases)
+	}
+}
+
+func TestAuthenticationDeadlineStopsSilentServerBeforeTotalBudget(t *testing.T) {
+	host, port, finish := fakeServer(t, func(conn net.Conn) error { return expectEOF(conn) })
+	c := testConfig()
+	c.Host, c.Port = host, port
+	c.AuthTimeout = 50 * time.Millisecond
+	c.Timeout = 2 * time.Second
+	start := time.Now()
+	err := Run(context.Background(), c, nil)
+	if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > time.Second {
+		t.Fatal("auth deadline ignored", err)
+	}
+	finish()
+}

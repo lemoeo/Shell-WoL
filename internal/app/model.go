@@ -3,9 +3,11 @@ package app
 import (
 	"errors"
 	"fmt"
+	"github.com/lemoeo/Shell-WoL/internal/vncprobe"
 	"net"
 	"net/url"
 	"strings"
+	"time"
 )
 
 type Config struct {
@@ -45,17 +47,26 @@ func (c Config) Validate() error {
 	return nil
 }
 
+type VNCConfig struct {
+	Port        int    `yaml:"port" json:"port"`
+	Username    string `yaml:"username" json:"username"`
+	HoldSeconds int    `yaml:"hold_seconds" json:"hold_seconds"`
+}
+
 type Device struct {
-	ID        string `yaml:"id" json:"id"`
-	Name      string `yaml:"name" json:"name"`
-	MAC       string `yaml:"mac" json:"mac"`
-	Broadcast string `yaml:"broadcast" json:"broadcast"`
-	Port      int    `yaml:"port" json:"port"`
-	Repeat    int    `yaml:"repeat" json:"repeat"`
-	Interface string `yaml:"interface" json:"interface"`
-	IP        string `yaml:"ip" json:"ip"`
-	ProbePort int    `yaml:"probe_port" json:"probe_port"`
-	Note      string `yaml:"note" json:"note"`
+	WakeMethod         string    `yaml:"wake_method,omitempty" json:"wake_method"`
+	VNC                VNCConfig `yaml:"vnc,omitempty" json:"vnc"`
+	PasswordConfigured bool      `yaml:"-" json:"password_configured"`
+	ID                 string    `yaml:"id" json:"id"`
+	Name               string    `yaml:"name" json:"name"`
+	MAC                string    `yaml:"mac" json:"mac"`
+	Broadcast          string    `yaml:"broadcast" json:"broadcast"`
+	Port               int       `yaml:"port" json:"port"`
+	Repeat             int       `yaml:"repeat" json:"repeat"`
+	Interface          string    `yaml:"interface" json:"interface"`
+	IP                 string    `yaml:"ip" json:"ip"`
+	ProbePort          int       `yaml:"probe_port" json:"probe_port"`
+	Note               string    `yaml:"note" json:"note"`
 }
 
 func (d *Device) Validate() error {
@@ -68,16 +79,38 @@ func (d *Device) Validate() error {
 	if d.Name == "" || len(d.Name) > 120 || len(d.Note) > 2000 {
 		return errors.New("名称不能为空且不超过 120 字节，备注不超过 2000 字节")
 	}
-	mac, err := net.ParseMAC(d.MAC)
-	if err != nil || len(mac) != 6 {
-		return errors.New("MAC 必须是 6 字节地址，例如 AA:BB:CC:DD:EE:FF")
+	if d.WakeMethod == "" {
+		d.WakeMethod = "wol"
 	}
-	d.MAC = strings.ToUpper(mac.String())
-	if err := destination(d.Broadcast); err != nil {
-		return err
+	if d.WakeMethod != "wol" && d.WakeMethod != "mac_vnc" && d.WakeMethod != "wol_mac_vnc" {
+		return errors.New("不支持的唤醒方式")
 	}
-	if d.Port < 1 || d.Port > 65535 || d.Repeat < 1 || d.Repeat > 10 {
-		return errors.New("端口须为 1–65535，重复次数 1–10")
+	if d.VNC.HoldSeconds < 0 || d.VNC.HoldSeconds > 30 {
+		return errors.New("认证后保持时间须为 0–30 秒")
+	}
+	if d.UsesVNC() {
+		if d.VNC.Port == 0 {
+			d.VNC.Port = 5900
+		}
+		if d.IP == "" {
+			return errors.New("Mac VNC 唤醒需要目标 IP")
+		}
+		if err := (vncprobe.Config{Host: d.IP, Port: d.VNC.Port, Stage: vncprobe.Auth, Username: d.VNC.Username, Timeout: time.Minute}).Validate(); err != nil {
+			return err
+		}
+	}
+	if d.WakeMethod != "mac_vnc" {
+		mac, err := net.ParseMAC(d.MAC)
+		if err != nil || len(mac) != 6 {
+			return errors.New("MAC 必须是 6 字节地址，例如 AA:BB:CC:DD:EE:FF")
+		}
+		d.MAC = strings.ToUpper(mac.String())
+		if err := destination(d.Broadcast); err != nil {
+			return err
+		}
+		if d.Port < 1 || d.Port > 65535 || d.Repeat < 1 || d.Repeat > 10 {
+			return errors.New("端口须为 1–65535，重复次数 1–10")
+		}
 	}
 	if len(d.Interface) > 128 {
 		return errors.New("网卡名称过长")
@@ -93,6 +126,8 @@ func (d *Device) Validate() error {
 	}
 	return nil
 }
+func (d Device) UsesVNC() bool { return d.WakeMethod == "mac_vnc" || d.WakeMethod == "wol_mac_vnc" }
+
 func destination(s string) error {
 	ip := net.ParseIP(s)
 	if ip == nil || ip.To4() == nil || ip.IsUnspecified() || ip.IsMulticast() {

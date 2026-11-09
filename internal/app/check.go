@@ -39,7 +39,8 @@ func CheckData(dir string, requirePassword, running bool) error {
 		return errors.New("devices.yaml 缺少设备列表或超过 1000 台")
 	}
 	seen := map[string]bool{}
-	for _, d := range df.Devices {
+	for i := range df.Devices {
+		d := &df.Devices[i]
 		if err = d.Validate(); err != nil {
 			return err
 		}
@@ -51,6 +52,29 @@ func CheckData(dir string, requirePassword, running bool) error {
 	var ef eventFile
 	if _, err = readYAML(filepath.Join(dir, "events.yaml"), &ef); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("events.yaml: %w", err)
+	}
+	credentials, err := readCredentials(dir)
+	if err != nil {
+		return err
+	}
+	if len(credentials.Credentials) > 0 {
+		key, e := credentialKey(dir, false)
+		if e != nil {
+			return e
+		}
+		defer clear(key)
+		for _, d := range df.Devices {
+			if record, ok := credentials.Credentials[d.ID]; ok {
+				if record.Binding != credentialBinding(d) {
+					return errors.New("设备目标与凭据不匹配，请重新配置 Mac 密码")
+				}
+				secret, e := decryptCredential(record, key)
+				if e != nil {
+					return e
+				}
+				clear(secret)
+			}
+		}
 	}
 	if !running {
 		return nil

@@ -33,14 +33,30 @@ var (
 	ErrAuthLimited  = errors.New("Mac 拒绝认证：失败尝试过多；请停止测试并检查账户状态")
 )
 
+type Phase string
+
+const (
+	Connecting     Phase = "connecting"
+	Authenticating Phase = "authenticating"
+	Holding        Phase = "holding"
+)
+
+type ConnectError struct{ Err error }
+
+func (e *ConnectError) Error() string { return "TCP 连接失败: " + e.Err.Error() }
+func (e *ConnectError) Unwrap() error { return e.Err }
+
 type Config struct {
-	Host     string
-	Port     int
-	Stage    Stage
-	Username string
-	Password []byte
-	Hold     time.Duration
-	Timeout  time.Duration
+	AuthTimeout time.Duration // Optional authentication deadline, separate from hold.
+	DialTimeout time.Duration // Optional bound for a single connection attempt.
+	Progress    func(Phase)
+	Host        string
+	Port        int
+	Stage       Stage
+	Username    string
+	Password    []byte
+	Hold        time.Duration
+	Timeout     time.Duration
 }
 
 // Validate checks connection settings before the CLI collects a password.
@@ -68,6 +84,9 @@ func (c Config) Validate() error {
 	}
 	if c.Timeout <= 0 || c.Timeout > 2*time.Minute || c.Hold < 0 || c.Hold >= c.Timeout {
 		return errors.New("timeout 须大于 0 且不超过 2 分钟；hold 须大于等于 0 且小于 timeout")
+	}
+	if c.AuthTimeout < 0 || c.DialTimeout < 0 || c.AuthTimeout > c.Timeout || c.DialTimeout > c.Timeout {
+		return errors.New("阶段超时不能超过总超时")
 	}
 	if c.Stage != TCP && (c.Username == "" || len(c.Username) > 63 || !utf8.ValidString(c.Username) || strings.ContainsAny(c.Username, "\x00\r\n")) {
 		return errors.New("auth/init 需要 --user；DH 用户名须为 1–63 字节的 UTF-8 文本，不能含 NUL 或换行")
@@ -98,17 +117,27 @@ func Run(parent context.Context, c Config, report func(string)) error {
 	if report == nil {
 		report = func(string) {}
 	}
+	authDeadline, _ := ctx.Deadline()
+	if c.AuthTimeout > 0 {
+		if end := time.Now().Add(c.AuthTimeout); end.Before(authDeadline) {
+			authDeadline = end
+		}
+	}
+	if c.Progress != nil {
+		c.Progress(Connecting)
+	}
 	report("开始 TCP 连接")
-	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", net.JoinHostPort(c.Host, strconv.Itoa(c.Port)))
+	dialCtx, cancelDial := context.WithDeadline(ctx, authDeadline)
+	conn, err := (&net.Dialer{Timeout: c.DialTimeout}).DialContext(dialCtx, "tcp", net.JoinHostPort(c.Host, strconv.Itoa(c.Port)))
+	cancelDial()
 	if err != nil {
-		return fmt.Errorf("TCP 连接失败: %w", err)
+		return &ConnectError{err}
 	}
 	defer conn.Close()
 	// Cancellation closes blocked I/O immediately; deadlines bound stalled peers.
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()
-	deadline, _ := ctx.Deadline()
-	if err = conn.SetDeadline(deadline); err != nil {
+	if err = conn.SetDeadline(authDeadline); err != nil {
 		return err
 	}
 	err = runConn(ctx, conn, c, report)
@@ -117,7 +146,7 @@ func Run(parent context.Context, c Config, report func(string)) error {
 	}
 	if err != nil {
 		var timeout net.Error
-		if errors.As(err, &timeout) && timeout.Timeout() && !time.Now().Before(deadline) {
+		if errors.As(err, &timeout) && timeout.Timeout() {
 			return context.DeadlineExceeded
 		}
 	}
@@ -130,6 +159,9 @@ func runConn(ctx context.Context, conn net.Conn, c Config, report func(string)) 
 		if err := negotiate(conn, report); err != nil {
 			return err
 		}
+		if c.Progress != nil {
+			c.Progress(Authenticating)
+		}
 		if err := authenticate(ctx, conn, c.Username, c.Password, report); err != nil {
 			return err
 		}
@@ -139,8 +171,15 @@ func runConn(ctx context.Context, conn net.Conn, c Config, report func(string)) 
 			}
 		}
 	}
+	deadline, _ := ctx.Deadline()
+	if err := conn.SetDeadline(deadline); err != nil {
+		return err
+	}
 	report("已到达 " + string(c.Stage) + " 阶段")
 	if c.Hold > 0 {
+		if c.Progress != nil {
+			c.Progress(Holding)
+		}
 		report("开始保持连接：" + c.Hold.String())
 		if err := hold(ctx, conn, c.Hold); err != nil {
 			return fmt.Errorf("保持连接失败: %w", err)

@@ -120,12 +120,25 @@ func run(args []string) error {
 		if provided["interface"] {
 			d.Interface = *iface
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if e = app.Wake(ctx, d); e != nil {
-			return e
+		if d.UsesVNC() && (provided["port"] || provided["repeat"] || provided["broadcast"] || provided["interface"]) {
+			return errors.New("Mac 模式请通过设备配置设置端口和参数，不接受 WoL 命令行覆盖")
 		}
-		fmt.Println("唤醒包已发送（尚未确认设备上线）")
+		var secret []byte
+		if d.UsesVNC() {
+			secret, e = app.ReadDevicePassword(*dir, d)
+			if e != nil {
+				return e
+			}
+			defer clear(secret)
+		}
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+		result := app.ExecuteWake(ctx, d, secret, func(message string) { fmt.Println(message) })
+		fmt.Println(result.Message)
+		if result.Status != "done" {
+			return errors.New("唤醒流程未全部完成，请检查以上结果")
+		}
+
 		return nil
 	}
 	store, e := app.OpenStore(*dir)
@@ -159,6 +172,7 @@ func run(args []string) error {
 			return e
 		}
 		server := app.NewServer(store)
+		defer server.Close()
 		if c.PasswordHash == "" {
 			fmt.Println("首次启动：请打开管理界面，使用以下初始化令牌设置密码（本次启动有效）：")
 			fmt.Println(server.SetupToken())

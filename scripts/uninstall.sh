@@ -141,7 +141,7 @@ check_paths() {
     check_file "$ROOT/bin/shell-wol"
     check_file "$ROOT/backup/shell-wol.previous"
     if [ "$PURGE" = 1 ]; then
-        for name in config.yaml devices.yaml events.yaml service.log service.err.log; do check_file "$DATA/$name"; done
+        for name in config.yaml devices.yaml events.yaml credentials.yaml credentials.key service.log service.err.log; do check_file "$DATA/$name"; done
     fi
 }
 confirm() {
@@ -215,7 +215,7 @@ main() {
     say "删除旧程序：$ROOT/backup/shell-wol.previous"
     if [ "$PURGE" = 1 ]; then
         say '清除以下数据文件（存在时）：'
-        for name in config.yaml devices.yaml events.yaml service.log service.err.log; do say "  $DATA/$name"; done
+        for name in config.yaml devices.yaml events.yaml credentials.yaml credentials.key service.log service.err.log; do say "  $DATA/$name"; done
     else say "保留数据与最小安装元数据：$DATA"; fi
     say '未知文件和系统账户始终保留。'
     [ "$DRY_RUN" = 0 ] || { say '预览完成，未执行任何更改。'; return; }
@@ -268,7 +268,7 @@ main() {
     chmod 600 "$STATE_TMP"; mv -f "$STATE_TMP" "$STATE"; STATE_TMP=
     rm -f "$ROOT/bin/shell-wol" "$ROOT/backup/shell-wol.previous"
     if [ "$PURGE" = 1 ]; then
-        for name in config.yaml devices.yaml events.yaml service.log service.err.log; do rm -f "$DATA/$name"; done
+        for name in config.yaml devices.yaml events.yaml credentials.yaml credentials.key service.log service.err.log; do rm -f "$DATA/$name"; done
         rm -f "$STATE"
     fi
     rmdir "$DATA/.lock"; OWN_DATA_LOCK=0
