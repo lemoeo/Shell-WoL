@@ -66,7 +66,7 @@ control "$1"
         old_profile=profile.read_bytes()
         self.f.make_release('v1.2.4')
         p=self.f.menu_dir/'menu.sh';p.write_text(p.read_text()+'# newer menu\n')
-        (self.f.base/'repository/main/deploy/SHA256SUMS').write_text(hashlib.sha256(p.read_bytes()).hexdigest()+'  menu.sh\n')
+        (self.f.menu_dir.parent/'deploy/SHA256SUMS').write_text(hashlib.sha256(p.read_bytes()).hexdigest()+'  menu.sh\n')
         self.f.tool('mv',r'''#!/bin/sh
 for arg in "$@"; do
  case "$arg" in */.shell-wol-install)

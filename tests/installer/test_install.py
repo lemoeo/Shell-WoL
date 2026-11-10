@@ -11,6 +11,7 @@ import unittest
 
 REPO = Path(__file__).resolve().parents[2]
 INSTALLER = REPO / 'scripts/install.sh'
+MENU_REF = '4c991dfc7a64bf78604bb570cf803d6621465950'
 
 BINARY = r'''#!/bin/sh
 version=VERSION_VALUE
@@ -120,9 +121,9 @@ class InstallerTests(unittest.TestCase):
         for name in ('shell-wol.service','shell-wol.openwrt','shell-wol.plist'):
             shutil.copyfile(REPO/'deploy'/name,self.template_dir/name)
         (self.template_dir/'SHA256SUMS').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in sorted(self.template_dir.iterdir()) if p.name!='SHA256SUMS'))
-        self.menu_dir=self.base/'repository/main/scripts';self.menu_dir.mkdir(parents=True,exist_ok=True)
+        self.menu_dir=self.base/'repository'/MENU_REF/'scripts';self.menu_dir.mkdir(parents=True,exist_ok=True)
         shutil.copyfile(REPO/'scripts/menu.sh',self.menu_dir/'menu.sh')
-        manifest=self.base/'repository/main/deploy/SHA256SUMS';manifest.parent.mkdir(parents=True,exist_ok=True)
+        manifest=self.menu_dir.parent/'deploy/SHA256SUMS';manifest.parent.mkdir(parents=True,exist_ok=True)
         manifest.write_text(hashlib.sha256((self.menu_dir/'menu.sh').read_bytes()).hexdigest()+'  menu.sh\n')
         self.manifest()
     def manifest(self):
@@ -245,7 +246,7 @@ class InstallerTests(unittest.TestCase):
         self.assertIn('/Shell-WoL/v1.2.3/deploy/SHA256SUMS',requests)
         self.assertIn('/Shell-WoL/v1.2.3/deploy/shell-wol.service',requests)
         self.assertNotIn('/main/deploy/shell-wol.',requests)
-        self.assertIn('/main/scripts/menu.sh',requests)
+        self.assertIn('/'+MENU_REF+'/scripts/menu.sh',requests)
         self.assertNotIn('/v1.2.4/',requests)
     def test_template_corruption_preserves_existing_install(self):
         self.run_install('--service',service=True)

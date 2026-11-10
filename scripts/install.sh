@@ -11,6 +11,8 @@ CDN_BASE=${SHELL_WOL_CDN_BASE:-https://cdn.jsdelivr.net}
 CUSTOM_DOWNLOAD=0
 CUSTOM_REPO=0
 VERSION=latest
+# Pin both files to one existing commit; CDN branch caches can update separately.
+MENU_REF=4c991dfc7a64bf78604bb570cf803d6621465950
 MENU_CHANGED=0
 PROFILE_CHANGED=0
 OLD_MENU=0
@@ -161,11 +163,11 @@ resource_url() {
         template:github) printf '%s/%s/deploy/%s\n' "$REPO_BASE" "$VERSION" "$3" ;;
         template:jsdelivr) printf '%s/gh/%s@%s/deploy/%s\n' "$CDN_BASE" "$REPO" "$VERSION" "$3" ;;
         menu:github)
-            if [ "$3" = SHA256SUMS ]; then printf '%s/main/deploy/SHA256SUMS\n' "$REPO_BASE"
-            else printf '%s/main/scripts/menu.sh\n' "$REPO_BASE"; fi ;;
+            if [ "$3" = SHA256SUMS ]; then printf '%s/%s/deploy/SHA256SUMS\n' "$REPO_BASE" "$MENU_REF"
+            else printf '%s/%s/scripts/menu.sh\n' "$REPO_BASE" "$MENU_REF"; fi ;;
         menu:jsdelivr)
-            if [ "$3" = SHA256SUMS ]; then printf '%s/gh/%s@main/deploy/SHA256SUMS\n' "$CDN_BASE" "$REPO"
-            else printf '%s/gh/%s@main/scripts/menu.sh\n' "$CDN_BASE" "$REPO"; fi ;;
+            if [ "$3" = SHA256SUMS ]; then printf '%s/gh/%s@%s/deploy/SHA256SUMS\n' "$CDN_BASE" "$REPO" "$MENU_REF"
+            else printf '%s/gh/%s@%s/scripts/menu.sh\n' "$CDN_BASE" "$REPO" "$MENU_REF"; fi ;;
         *) return 1 ;;
     esac
 }
@@ -787,8 +789,7 @@ main() {
         fetch_resource template "$template" "$TMP/$template" || fail "无法获取 $VERSION 标签的服务模板，不会回退到 main"
         verify_asset "$template" "$TMP/template-SHA256SUMS"
     fi
-    # Like ShellClash, the small menu follows repository updates, independently
-    # of the Go binary. Check its digest once before installing it.
+    # Menu updates are independent of the Go binary; use one immutable snapshot.
     fetch_resource menu SHA256SUMS "$TMP/menu-SHA256SUMS" || fail '无法下载菜单校验清单'
     fetch_resource menu menu.sh "$TMP/menu.sh" || fail '无法下载终端菜单'
     verify_asset menu.sh "$TMP/menu-SHA256SUMS"

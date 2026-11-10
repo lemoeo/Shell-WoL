@@ -25,11 +25,11 @@ sh install.sh
 | 最新正式版本信息 | Release 的 `latest/download/VERSION` | 资产分支 `@assets/VERSION` |
 | 二进制及其 SHA256SUMS | Release 的 `download/<版本>/` | 固定资产标签 `@assets-<版本>/` |
 | 服务模板及其 SHA256SUMS | 源码 `<版本>/deploy/` | 源码 `@<版本>/deploy/` |
-| 终端菜单及其校验清单 | 源码 `main/scripts/menu.sh`、`main/deploy/SHA256SUMS` | 对应 `@main` 文件 |
+| 终端菜单及其校验清单 | 源码 `<MENU_REF>/scripts/menu.sh`、`<MENU_REF>/deploy/SHA256SUMS` | 同一提交的 `@<MENU_REF>` 文件 |
 
 首次解析 latest 后，二进制与模板全部固定到同一版本，不会改用 main 或旧版模板。仅访问所选源，下载或校验失败直接停止；需要换源时重新执行并指定 `--source`。
 
-终端菜单单独从 main 下载并校验，安装为根目录的 `menu.sh`，通过 profile 别名 `swol` 进入。菜单更新跟随仓库，不需要新 Go Release 或额外标签；完整命令及权限说明见 [终端菜单](terminal-menu.md)。
+终端菜单和清单固定到安装器 `MENU_REF` 指定的同一个已存在提交，避免 CDN 的 main 分支缓存不同步。校验通过后安装为根目录的 `menu.sh`，通过 profile 别名 `swol` 进入。不需要新 Go Release 或额外标签；完整命令及权限说明见 [终端菜单](terminal-menu.md)。
 
 旧 Release 已上传的脚本和模板无需删除。**旧标签如果没有 `deploy/SHA256SUMS`，新安装器无法为该版本自动安装服务**；可使用原配套安装方式，或不加 `--service` 只安装程序并手动运行。已有受管理服务的升级会保留服务类型，因此也需要选择包含模板清单的新标签。不要移动旧标签来补文件；应提交文件并发布新版本。
 
@@ -308,7 +308,7 @@ sh scripts/template-checksums.sh --check
 
 将模板与 `deploy/SHA256SUMS` 一起提交，再创建版本标签。Tests、Release 工作流和构建脚本都会检查该清单；摘要过期会导致检查失败。不要在 Release 工作流中自动覆盖仓库清单来绕过检查。
 
-该清单还包含 `scripts/menu.sh` 的摘要；菜单修改后运行同一个 `template-checksums.sh` 更新即可。菜单本身从 main 安装，不需要为菜单修改创建程序版本标签。
+该清单还包含 `scripts/menu.sh` 的摘要；菜单修改后运行同一个 `template-checksums.sh` 更新。先提交菜单和清单，再将安装器的 `MENU_REF` 更新为该提交的完整 SHA；不需要为菜单创建程序版本标签。
 
 ## Mac VNC 凭据
 

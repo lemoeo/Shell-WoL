@@ -15,6 +15,7 @@ class SourceTests(unittest.TestCase):
     def test_explicit_github_never_contacts_cdn(self):
         self.f.run_install('--source', 'github', '--service', service=True)
         self.assertTrue(all('jsdelivr.net' not in u for u in self.requests()))
+        self.assertTrue(any('/'+fixture.MENU_REF+'/scripts/menu.sh' in u for u in self.requests()))
 
     def test_omitted_source_defaults_to_github(self):
         # An old terminal setting must not silently change the default source.
@@ -29,8 +30,27 @@ class SourceTests(unittest.TestCase):
         self.assertTrue(any('@assets/VERSION' in u for u in requests))
         self.assertTrue(any('@assets-v1.2.3/shell-wol-linux-amd64' in u for u in requests))
         self.assertTrue(any('@v1.2.3/deploy/shell-wol.service' in u for u in requests))
-        self.assertTrue(any('@main/scripts/menu.sh' in u for u in requests))
-        self.assertFalse(any('/releases/' in u or '@main/deploy/shell-wol.' in u or '@latest' in u for u in requests))
+        self.assertTrue(any('@'+fixture.MENU_REF+'/scripts/menu.sh' in u for u in requests))
+        self.assertFalse(any('/releases/' in u or '@main/' in u or '@latest' in u for u in requests))
+
+    def test_old_branch_manifest_without_menu_does_not_affect_install(self):
+        # Reproduce the real CDN response: main still has the old three lines.
+        old=self.f.base/'repository/main/deploy/SHA256SUMS'
+        old.parent.mkdir(parents=True)
+        old.write_text(''.join(line+'\n' for line in
+            (fixture.REPO/'deploy/SHA256SUMS').read_text().splitlines()
+            if line.split()[-1]!='menu.sh'))
+        self.f.run_install('--source','jsdelivr')
+        requests=self.requests()
+        self.assertFalse(any('@main/' in u for u in requests))
+        self.assertTrue(any('@'+fixture.MENU_REF+'/deploy/SHA256SUMS' in u for u in requests))
+        self.assertTrue((self.f.root/'menu.sh').exists())
+
+    def test_missing_fixed_menu_manifest_does_not_fall_back_to_branch(self):
+        (self.f.menu_dir.parent/'deploy/SHA256SUMS').unlink()
+        self.f.run_install('--source','jsdelivr',success=False)
+        self.assertFalse(any('@main/' in u for u in self.requests()))
+        self.assertFalse(self.f.root.exists())
 
     def test_testingcf_environment_default_with_cli_override(self):
         self.f.env['SHELL_WOL_CDN_BASE'] = 'https://testingcf.jsdelivr.net'
