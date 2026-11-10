@@ -123,7 +123,8 @@ CDN 的分支文件可能有缓存延迟。二进制版本只从 `@assets/VERSIO
 ├── bin/shell-wol
 ├── data/                 YAML 数据及凭据密钥；初始化后默认私有权限
 ├── backup/shell-wol.previous
-├── menu.sh              简单交互菜单及服务启停
+├── menu.sh              交互菜单：服务启停、升级与卸载
+├── uninstall.sh         本地离线卸载器
 ├── boot.sh              仅 firewall 模式，从 scripts/boot.sh 安装
 ├── service/shell-wol.procd  仅 firewall 模式，服务文件的持久副本
 └── .shell-wol-install    安装器版本、服务、启动模式及文件摘要
@@ -222,7 +223,7 @@ sudo cat "/Library/Application Support/Shell-WoL/data/service.log"
 
 ## 升级、冲突与回退
 
-再次运行安装器可升级；已有安装的服务类型会自动保留，不需要再次传 `--service`。
+菜单第 6 项或 `wol upgrade` 可交互升级，选择安装源并确认后复用安装器。也可再次运行安装器升级；已有安装的服务类型会自动保留，不需要再次传 `--service`。
 
 - 下载、SHA256 和版本运行检查在替换程序前完成；服务模板和脚本根据 main 的 `deploy/SHA256SUMS` 验证摘要，和 Release 的二进制校验清单分开处理。
 - 升级前只读校验已有 YAML，停止本安装管理的服务，再通过 Go 检查内核锁。文件 `data/.lock` 可以保留；旧版目录锁仍需确认无进程后人工迁移。
@@ -241,7 +242,7 @@ firewall 安装使用 schema 2 元数据，旧版安装器/卸载器会拒绝处
 
 ## 卸载与重新安装
 
-卸载器为独立 POSIX Shell 脚本，从仓库下载，不作为 Release 附件；下载后卸载过程不联网，也不依赖同目录下存在 install.sh。
+安装器从 main 下载并校验独立的 POSIX Shell 卸载器，保存为安装根目录的 `uninstall.sh`。使用菜单第 7 项或 `wol uninstall` 可选择保留数据或清除数据，最终由卸载器确认；该过程无需联网。也可独立从仓库下载脚本，不作为 Release 附件，不依赖同目录下存在 install.sh。
 
 ```sh
 curl --fail --location --proto '=https' --proto-redir '=https' \
@@ -277,7 +278,7 @@ sudo sh uninstall.sh --install-dir /opt/shell-wol --purge
 | 内容 | 默认 | `--purge` |
 | --- | --- | --- |
 | 受管理的服务文件及开机启动 | 移除 | 移除 |
-| `menu.sh` 和本安装的 `wol` 别名 | 移除 | 移除 |
+| `menu.sh`、本地 `uninstall.sh` 和本安装的 `wol` 别名 | 移除 | 移除 |
 | 私有初始化令牌及本安装的运行锁文件 | 移除 | 移除 |
 | 本安装的 firewall include、`boot.sh`、持久 procd 副本及禁用标记 | 移除 | 移除 |
 | `bin/shell-wol`、`backup/shell-wol.previous` | 删除 | 删除 |
@@ -340,7 +341,7 @@ sh scripts/template-checksums.sh --check
 
 将模板与 `deploy/SHA256SUMS` 一起提交并推送 main 即可生效，无需创建版本标签。Tests、Release 工作流和构建脚本都会检查该清单；摘要过期会导致检查失败。不要在 Release 工作流中自动覆盖仓库清单来绕过检查。
 
-该清单还包含 `scripts/menu.sh` 和 `scripts/boot.sh` 的摘要；修改任一脚本后运行同一个 `template-checksums.sh` 更新。仅更新 Shell 脚本不需要重发二进制；Go 程序发生变化时再重新编译并发布 Release。
+该清单还包含 `scripts/menu.sh`、`scripts/boot.sh` 和 `scripts/uninstall.sh` 的摘要；修改任一脚本后运行同一个 `template-checksums.sh` 更新。仅更新 Shell 脚本不需要重发二进制；Go 程序发生变化时再重新编译并发布 Release。
 
 ## Mac VNC 凭据
 

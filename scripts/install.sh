@@ -13,7 +13,6 @@ CUSTOM_REPO=0
 VERSION=latest
 MENU_CHANGED=0
 PROFILE_CHANGED=0
-OLD_MENU=0
 OLD_PROFILE=0
 MENU_PROFILE=
 MENU_ENTRY_TMP=
@@ -367,8 +366,10 @@ rollback() {
         else rm -f "$MENU_PROFILE"; fi
     fi
     if [ "$MENU_CHANGED" = 1 ]; then
-        if [ "$OLD_MENU" = 1 ]; then cp -p "$TMP/old-menu" "$ROOT/menu.sh"
-        else rm -f "$ROOT/menu.sh"; fi
+        for name in menu.sh uninstall.sh; do
+            if [ -f "$TMP/old-$name" ]; then cp -p "$TMP/old-$name" "$ROOT/$name"
+            else rm -f "$ROOT/$name"; fi
+        done
     fi
     if [ "$SERVICE_CHANGED" = 1 ]; then
         service_stop >/dev/null 2>&1 || :
@@ -434,10 +435,13 @@ menu_profile_path() {
     fi
 }
 check_menu_paths() {
-    [ ! -L "$ROOT/menu.sh" ] || fail 'menu.sh 不能是符号链接'
-    if [ -e "$ROOT/menu.sh" ]; then
-        [ -f "$ROOT/menu.sh" ] && [ "$(checksum "$ROOT/menu.sh")" = "$(state_value menu_sha256)" ] || fail 'menu.sh 无安装记录或已被修改'
-    fi
+    for name in menu.sh uninstall.sh; do
+        [ ! -L "$ROOT/$name" ] || fail "$name 不能是符号链接"
+        if [ -e "$ROOT/$name" ]; then
+            case "$name" in menu.sh) hash_field=menu_sha256 ;; uninstall.sh) hash_field=uninstall_sha256 ;; esac
+            [ -f "$ROOT/$name" ] && [ "$(checksum "$ROOT/$name")" = "$(state_value "$hash_field")" ] || fail "$name 无安装记录或已被修改"
+        fi
+    done
     validate_dir "$MENU_PROFILE"
     parent=$MENU_PROFILE
     while [ "$parent" != / ]; do [ ! -L "$parent" ] || fail '菜单 profile 路径含符号链接'; parent=$(dirname "$parent"); done
@@ -447,12 +451,16 @@ check_menu_paths() {
         if grep -E '^[[:space:]]*alias[[:space:]]+wol=' "$MENU_PROFILE" | grep -Fvx "$MENU_ALIAS" >/dev/null; then fail 'profile 已有其他 wol 别名'; fi
     fi
 }
-install_menu() {
+install_management_scripts() {
     check_menu_paths
-    if [ -f "$ROOT/menu.sh" ]; then cp -p "$ROOT/menu.sh" "$TMP/old-menu"; OLD_MENU=1; fi
+    for name in menu.sh uninstall.sh; do
+        if [ -f "$ROOT/$name" ]; then cp -p "$ROOT/$name" "$TMP/old-$name"; fi
+    done
     if [ -f "$MENU_PROFILE" ]; then cp -p "$MENU_PROFILE" "$TMP/old-menu-profile"; OLD_PROFILE=1; fi
     MENU_CHANGED=1
-    cp "$TMP/menu.sh" "$ROOT/menu.sh"; chmod 755 "$ROOT/menu.sh"
+    for name in menu.sh uninstall.sh; do
+        cp "$TMP/$name" "$ROOT/$name"; chmod 755 "$ROOT/$name"
+    done
     MENU_ENTRY_TMP=$(mktemp "$MENU_PROFILE.shell-wol.XXXXXX")
     if [ "$OLD_PROFILE" = 1 ]; then
         cp -p "$MENU_PROFILE" "$MENU_ENTRY_TMP"
@@ -670,8 +678,10 @@ download_assets() {
         fetch_resource script boot.sh "$TMP/boot.sh" || fail '无法下载 main 的 boot.sh'
         verify_asset boot.sh "$TMP/deploy-SHA256SUMS"
     fi
-    fetch_resource script menu.sh "$TMP/menu.sh" || fail '无法下载 main 终端菜单'
-    verify_asset menu.sh "$TMP/deploy-SHA256SUMS"
+    for name in menu.sh uninstall.sh; do
+        fetch_resource script "$name" "$TMP/$name" || fail "无法下载 main 的 $name"
+        verify_asset "$name" "$TMP/deploy-SHA256SUMS"
+    done
     existing=$ROOT
     while [ ! -d "$existing" ]; do existing=$(dirname "$existing"); done
     [ -w "$existing" ] || fail "目录不可写：$existing"
@@ -790,11 +800,11 @@ install_service() {
 }
 
 save_installation() {
-    install_menu
+    install_management_scripts
     {
         schema=1; [ "$BOOT_MODE" != firewall ] || schema=2
         printf 'schema=%s\nversion=%s\nservice=%s\nservice_sha256=%s\nboot_mode=%s\n' "$schema" "$VERSION" "$SERVICE" "$service_hash" "$BOOT_MODE"
-        printf 'install_mode=%s\n' "$INSTALL_MODE"
+        printf 'install_mode=%s\nuninstall_sha256=%s\n' "$INSTALL_MODE" "$(checksum "$ROOT/uninstall.sh")"
         printf 'menu_profile=%s\nmenu_sha256=%s\n' "$MENU_PROFILE" "$(checksum "$ROOT/menu.sh")"
         if [ "$BOOT_MODE" = firewall ]; then printf 'boot_script=%s/boot.sh\nuci_section=ShellWoL\nboot_sha256=%s\n' "$ROOT" "$(checksum "$ROOT/boot.sh")"; fi
     } >"$ROOT/.shell-wol-install.new"
@@ -840,7 +850,7 @@ report_result() {
     if [ "$CUSTOM_REPO" = 0 ] && [ "$SOURCE" = jsdelivr ]; then
         say "卸载脚本：$CDN_BASE/gh/$REPO@main/scripts/uninstall.sh"
     else say "卸载脚本：$REPO_BASE/main/scripts/uninstall.sh"; fi
-    say "预览卸载：sh uninstall.sh --install-dir \"$ROOT\" --dry-run（用户安装加 --user）"
+    say "本地离线卸载：wol uninstall；预览：sh \"$ROOT/uninstall.sh\" --install-dir \"$ROOT\" --dry-run"
 }
 
 main() {

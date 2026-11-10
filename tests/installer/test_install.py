@@ -121,14 +121,14 @@ class InstallerTests(unittest.TestCase):
         for name in ('shell-wol.service','shell-wol.openwrt','shell-wol.plist'):
             shutil.copyfile(REPO/'deploy'/name,self.template_dir/name)
         self.menu_dir=self.base/'repository/main/scripts';self.menu_dir.mkdir(parents=True,exist_ok=True)
-        for name in ('menu.sh','boot.sh'):
+        for name in ('menu.sh','boot.sh','uninstall.sh'):
             shutil.copyfile(REPO/'scripts'/name,self.menu_dir/name)
         self.template_manifest()
         self.manifest()
     def template_manifest(self):
         scripts=self.template_dir.parent/'scripts'
         files=[p for p in sorted(self.template_dir.iterdir()) if p.name!='SHA256SUMS']
-        files += [scripts/'menu.sh',scripts/'boot.sh']
+        files += [scripts/name for name in ('menu.sh','boot.sh','uninstall.sh')]
         (self.template_dir/'SHA256SUMS').write_text(''.join(
             hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in files))
     def manifest(self):
@@ -316,7 +316,7 @@ class InstallerTests(unittest.TestCase):
         self.assertNotIn('/download/v1.2.3/shell-wol.service',(self.base/'downloads').read_text())
     def test_template_checksum_helper_detects_stale_manifest(self):
         project=self.base/'project';(project/'scripts').mkdir(parents=True);(project/'deploy').mkdir()
-        for name in ('menu.sh','boot.sh'):
+        for name in ('menu.sh','boot.sh','uninstall.sh'):
             shutil.copyfile(REPO/'scripts'/name,project/'scripts'/name)
         helper=project/'scripts/template-checksums.sh';shutil.copyfile(REPO/'scripts/template-checksums.sh',helper)
         for name in ('shell-wol.service','shell-wol.openwrt','shell-wol.plist','SHA256SUMS'):

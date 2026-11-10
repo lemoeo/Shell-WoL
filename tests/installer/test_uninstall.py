@@ -79,6 +79,14 @@ class UninstallTests(unittest.TestCase):
         self.assertEqual(r.returncode,0,r.stdout+r.stderr)
         self.assertIn('install_mode=user',(self.root/'.shell-wol-install').read_text())
 
+    def test_owned_local_uninstaller_symlink_is_rejected(self):
+        self.install()
+        target=self.fixture.base/'user-script';target.write_text('keep')
+        local=self.root/'uninstall.sh';local.unlink();local.symlink_to(target)
+        self.uninstall('--purge',success=False)
+        self.assertEqual(target.read_text(),'keep')
+        self.assertTrue((self.root/'bin/shell-wol').exists())
+
     def test_default_keeps_data_and_reinstall(self):
         self.install(service=True)
         data=self.root/'data';(data/'devices.yaml').write_text('devices: []\n# preserve\n')

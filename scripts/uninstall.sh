@@ -222,6 +222,7 @@ check_paths() {
     check_file "$ROOT/bin/shell-wol"
     check_file "$ROOT/backup/shell-wol.previous"
     check_file "$DATA/.setup-token"
+    if [ -f "$STATE" ] && [ -n "$(state_value uninstall_sha256)" ]; then check_file "$ROOT/uninstall.sh"; fi
     if [ -n "$MENU_SHA" ]; then check_file "$ROOT/menu.sh"; fi
     if [ -n "$MENU_PROFILE" ]; then
         validate_dir "$MENU_PROFILE"
@@ -287,11 +288,13 @@ finish_uninstall() {
         mv -f "$STATE_TMP" "$MENU_PROFILE"; STATE_TMP=
     fi
     # Record the detached service before deleting programs, making retries safe.
+    uninstall_hash=$(state_value uninstall_sha256)
     recorded_mode=$(state_value install_mode)
     previous=$(state_value last_version)
     if [ -z "$previous" ]; then previous=$(state_value version); fi
     STATE_TMP=$(mktemp "$ROOT/.uninstall-state.XXXXXX")
     printf 'schema=1\nversion=uninstalled\nservice=none\nservice_sha256=\nstatus=uninstalled\nlast_version=%s\n' "$previous" >"$STATE_TMP"
+    if [ -n "$uninstall_hash" ]; then printf 'uninstall_sha256=%s\n' "$uninstall_hash" >>"$STATE_TMP"; fi
     if [ -n "$recorded_mode" ]; then printf 'install_mode=%s\n' "$recorded_mode" >>"$STATE_TMP"; fi
     printf 'menu_profile=%s\nmenu_sha256=%s\n' "$MENU_PROFILE" "$MENU_SHA" >>"$STATE_TMP"
     chmod 600 "$STATE_TMP"; mv -f "$STATE_TMP" "$STATE"; STATE_TMP=
@@ -301,6 +304,7 @@ finish_uninstall() {
     fi
     rm -f "$ROOT/bin/shell-wol" "$ROOT/backup/shell-wol.previous"
     if [ -n "$MENU_SHA" ]; then rm -f "$ROOT/menu.sh"; fi
+    if [ -n "$uninstall_hash" ]; then rm -f "$ROOT/uninstall.sh"; fi
     rm -f "$DATA/.setup-token"
     if [ "$PURGE" = 1 ]; then
         for name in config.yaml devices.yaml events.yaml credentials.yaml credentials.key service.log service.err.log; do rm -f "$DATA/$name"; done
@@ -383,6 +387,7 @@ main() {
     if [ "$BOOT_MODE" = firewall ]; then say "移除自启动：firewall.ShellWoL、$ROOT/boot.sh、$ROOT/service/shell-wol.procd"; fi
     say "删除程序：$ROOT/bin/shell-wol"
     say "删除旧程序：$ROOT/backup/shell-wol.previous"
+    if [ -n "$(state_value uninstall_sha256)" ]; then say "删除本地卸载脚本：$ROOT/uninstall.sh"; fi
     if [ -n "$MENU_SHA" ]; then say "删除终端菜单：$ROOT/menu.sh；清理本安装的 wol 别名"; fi
     if [ "$PURGE" = 1 ]; then
         say '清除以下数据文件（存在时）：'

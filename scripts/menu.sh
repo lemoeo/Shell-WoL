@@ -124,22 +124,90 @@ control() {
     fi
     case "$1" in start) start_service ;; stop) stop_service ;; restart) stop_service && start_service ;; esac
 }
+download_installer() {
+    if command -v curl >/dev/null 2>&1; then
+        curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+            --connect-timeout 5 --max-time 60 --output "$2" "$1"
+    elif command -v wget >/dev/null 2>&1 && wget --help 2>&1 | grep -q -- '--https-only'; then
+        wget --https-only -q -t 1 -T 60 -O "$2" "$1"
+    else error '需要 curl 或支持证书校验的 wget'; return 1; fi
+}
+maintenance() (
+    action=$1
+    [ -t 0 ] && [ -t 1 ] || { error '升级和卸载需要交互终端'; return 1; }
+    mode=$(field install_mode)
+    if [ -z "$mode" ]; then
+        case "$SERVICE" in
+            launchd-user) mode=user ;;
+            systemd|procd|launchd-system) mode=system ;;
+            *) error '旧安装记录缺少安装模式，请先按原安装参数运行最新安装器'; return 1 ;;
+        esac
+    fi
+    case "$mode" in
+        user) ;;
+        system) [ "$(id -u)" = 0 ] || { error '系统安装的升级和卸载需要 root 权限'; return 1; } ;;
+        *) error '安装模式无效'; return 1 ;;
+    esac
+    [ -w "$ROOT" ] || { error '请以原安装账户运行，安装目录不可写'; return 1; }
+    [ ! -e "$ROOT/.install-lock" ] && [ ! -L "$ROOT/.install-lock" ] || { error '安装或服务管理正在进行'; return 1; }
+    set -- --install-dir "$ROOT"
+    [ "$mode" != user ] || set -- "$@" --user
+    case "$action" in
+        upgrade)
+            printf '\n安装源：1 GitHub（默认）  2 jsDelivr  0 返回\n请选择 [1]：'
+            IFS= read -r choice || return 2
+            cdn=${SHELL_WOL_CDN_BASE:-https://cdn.jsdelivr.net}; cdn=${cdn%/}
+            case "$choice" in
+                0) return 2 ;;
+                ''|1) source=github; url=https://raw.githubusercontent.com/lemoeo/Shell-WoL/main/scripts/install.sh ;;
+                2)
+                    source=jsdelivr
+                    printf 'CDN 源站（HTTPS），回车使用 %s：' "$cdn"
+                    IFS= read -r custom_cdn || return 2
+                    [ -z "$custom_cdn" ] || cdn=${custom_cdn%/}
+                    printf '%s\n' "$cdn" | LC_ALL=C grep -Eq '^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]+)?$' || { error 'CDN 须为 HTTPS 源站地址，不含路径'; return 1; }
+                    url=$cdn/gh/lemoeo/Shell-WoL@main/scripts/install.sh ;;
+                *) error '无效安装源'; return 1 ;;
+            esac
+            printf '当前版本：%s\n安装目录：%s\n升级到最新正式版并保留现有配置？ [y/N] ' "$(field version)" "$ROOT"
+            IFS= read -r answer || return 2
+            case "$answer" in y|Y|yes|YES) ;; *) return 2 ;; esac
+            maintenance_tmp=$(mktemp -d "${TMPDIR:-/tmp}/shell-wol-menu.XXXXXX") || return 1
+            trap 'rm -rf "$maintenance_tmp"' 0
+            trap 'exit 130' INT
+            trap 'exit 143' HUP TERM
+            download_installer "$url" "$maintenance_tmp/install.sh" || { error '安装器下载失败，现有安装未更改'; return 1; }
+            [ -s "$maintenance_tmp/install.sh" ] && sh -n "$maintenance_tmp/install.sh" || { error '安装器为空或语法无效'; return 1; }
+            # The installer owns all locks; --yes follows the confirmation above.
+            SHELL_WOL_INSTALL_LIBRARY=0 sh "$maintenance_tmp/install.sh" "$@" --source "$source" --cdn-base "$cdn" --yes || return 1
+            printf '升级完成，请重新输入 wol 打开新菜单。\n' ;;
+        uninstall)
+            [ -f "$ROOT/uninstall.sh" ] && [ ! -L "$ROOT/uninstall.sh" ] && [ -n "$(field uninstall_sha256)" ] || { error '本地卸载脚本缺失，请重新运行最新安装器补齐'; return 1; }
+            printf '\n1. 卸载程序，保留数据（默认）\n2. 卸载程序，同时清除数据\n0. 返回\n请选择 [1]：'
+            IFS= read -r choice || return 2
+            case "$choice" in 0) return 2 ;; ''|1) ;; 2) set -- "$@" --purge ;; *) error '无效选择'; return 1 ;; esac
+            # Keep the uninstaller's own preview and final confirmation; no --yes.
+            SHELL_WOL_UNINSTALL_LIBRARY=0 sh "$ROOT/uninstall.sh" "$@" || return 1 ;;
+    esac
+)
 main() {
     setup || return 1
+    [ "$#" -le 1 ] || { error '用法：wol [status|start|restart|stop|token|upgrade|uninstall]'; return 2; }
     case "${1:-menu}" in
         status) status; return $? ;;
         token)
             "$BIN" token --help >/dev/null 2>&1 || { error '当前程序不支持 token 命令，请升级 Go 程序'; return 1; }
             "$BIN" token --data-dir "$DATA"; return $? ;;
         start|stop|restart) control "$1"; return $? ;;
+        upgrade|uninstall) maintenance "$1"; return $? ;;
         menu) ;;
-        *) error '用法：wol [status|start|restart|stop|token]'; return 2 ;;
+        *) error '用法：wol [status|start|restart|stop|token|upgrade|uninstall]'; return 2 ;;
     esac
     [ -t 0 ] && [ -t 1 ] || { error '交互菜单需要终端，可使用 wol status'; return 2; }
     while :; do
         printf '\n----------------------------------------\n'
         status || :
-        printf '\n1. 启动服务\n2. 重启服务\n3. 停止服务\n4. 刷新状态\n5. 查看初始化令牌\n0. 退出\n请选择：'
+        printf '\n1. 启动服务\n2. 重启服务\n3. 停止服务\n4. 刷新状态\n5. 查看初始化令牌\n6. 升级程序\n7. 卸载程序\n0. 退出\n请选择：'
         IFS= read -r choice || return 0
         case "$choice" in
             0|'') return 0 ;;
@@ -149,6 +217,10 @@ main() {
                 sh "$ROOT/menu.sh" "$action" || : ;;
             4) continue ;;
             5) sh "$ROOT/menu.sh" token || : ;;
+            6|7)
+                case "$choice" in 6) action=upgrade ;; 7) action=uninstall ;; esac
+                if maintenance "$action"; then return 0
+                else code=$?; [ "$code" != 2 ] || continue; fi ;;
             *) printf '无效选择。\n' ;;
         esac
         printf '按回车返回……'; IFS= read -r pause || return 0

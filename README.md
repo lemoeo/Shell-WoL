@@ -11,7 +11,7 @@
 - Web 设置、设备 YAML 导出、最多 1000 条操作记录（默认 100 条）。
 - YAML 注释及未知扩展字段尽量保留；保存时统一排版。
 - macOS、Windows、Linux，以及面向 OpenWrt 和兼容二次开发固件的交叉编译脚本与 procd 部署示例。
-- 简单的 Shell 终端菜单：显示状态、PID、内存，支持启动、重启和停止后台服务。
+- 简单的 Shell 终端菜单：显示状态、PID、内存，支持启动、重启、停止，以及交互升级、卸载。
 - 系统文件锁自动释放，支持强制退出后的再次启动；后台初始化令牌可通过 `wol token` 查看。
 
 ## 平台范围
@@ -57,7 +57,7 @@ export url='https://raw.githubusercontent.com/lemoeo/Shell-WoL/main' \
 
 使用 Bash 或其他 Shell 时，将最后一行的 profile 路径换为安装器提示的文件；也可安装后重新登录。Linux 用户安装和先下载查看脚本再执行的方式见 [安装指南](docs/install.md#发布前提与安装入口)。
 
-安装器支持版本固定、SHA256 校验、保留数据升级和可选后台服务，不自动开放局域网访问。首次注册服务会直接启动；尚未设置管理员密码时，通过 `wol token` 查看初始化令牌，再到浏览器设置密码。菜单支持 `wol status`、`wol start`、`wol restart`、`wol stop`；系统安装使用原安装账户，完整路径、更新和卸载见 [终端菜单说明](docs/terminal-menu.md)。
+安装器支持版本固定、SHA256 校验、保留数据升级和可选后台服务，不自动开放局域网访问。首次注册服务会直接启动；尚未设置管理员密码时，通过 `wol token` 查看初始化令牌，再到浏览器设置密码。菜单支持 `wol status`、`wol start`、`wol restart`、`wol stop`，以及 `wol upgrade`、`wol uninstall`；系统安装使用原安装账户，完整路径、更新和卸载见 [终端菜单说明](docs/terminal-menu.md)。
 
 安装器默认 CDN 为 `https://cdn.jsdelivr.net`；上面的 CDN 命令显式使用 `testingcf.jsdelivr.net`。切换 CDN 时，同时修改入口 `url` 的域名和 `--cdn-base`；也可用环境变量 `SHELL_WOL_CDN_BASE` 设置安装器默认 CDN。CDN 二进制需要先由发布流程同步 `assets-版本` 标签，已有 Release 可通过 **Sync CDN assets** 工作流补齐，见 [安装源和 CDN](docs/install.md#安装源和-cdn)。
 
@@ -65,7 +65,7 @@ export url='https://raw.githubusercontent.com/lemoeo/Shell-WoL/main' \
 
 ## 卸载
 
-从仓库下载独立 [卸载脚本](scripts/uninstall.sh)，无需网络依赖即可执行。以 Linux 系统安装为例：
+新版安装可直接运行 `wol uninstall`（菜单第 7 项），默认保留数据，也可选择清除数据；安装器已将独立卸载脚本保存到根目录，支持离线卸载。也可从仓库下载 [卸载脚本](scripts/uninstall.sh)。以 Linux 系统安装为例：
 
 ```sh
 sh uninstall.sh --install-dir /opt/shell-wol --dry-run

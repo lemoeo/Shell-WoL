@@ -72,7 +72,7 @@ control "$1"
 
     def test_bad_menu_checksum_preserves_program_and_profile(self):
         self.f.run_install()
-        before={n:(self.root/n).read_bytes() for n in ('menu.sh','bin/shell-wol','.shell-wol-install')}
+        before={n:(self.root/n).read_bytes() for n in ('menu.sh','uninstall.sh','bin/shell-wol','.shell-wol-install')}
         profile=(self.f.home/'.profile').read_bytes()
         self.f.env['CORRUPT_CDN_SUFFIX']='/scripts/menu.sh'
         self.f.run_install('--source','jsdelivr',success=False)
@@ -83,11 +83,11 @@ control "$1"
         self.f.run_install()
         profile=self.f.home/'.profile'
         profile.write_text('# user setting\n'+profile.read_text())
-        before={n:(self.root/n).read_bytes() for n in ('menu.sh','bin/shell-wol','.shell-wol-install')}
+        before={n:(self.root/n).read_bytes() for n in ('menu.sh','uninstall.sh','bin/shell-wol','.shell-wol-install')}
         old_profile=profile.read_bytes()
         self.f.make_release('v1.2.4')
         p=self.f.menu_dir/'menu.sh';p.write_text(p.read_text()+'# newer menu\n')
-        (self.f.menu_dir.parent/'deploy/SHA256SUMS').write_text(hashlib.sha256(p.read_bytes()).hexdigest()+'  menu.sh\n')
+        self.f.template_manifest()
         self.f.tool('mv',r'''#!/bin/sh
 for arg in "$@"; do
  case "$arg" in */.shell-wol-install)
@@ -100,6 +100,15 @@ exec /bin/mv "$@"
         for n,data in before.items():self.assertEqual((self.root/n).read_bytes(),data)
         self.assertEqual(profile.read_bytes(),old_profile)
         self.assertFalse((self.root/'.install-lock').exists())
+
+    def test_corrupt_uninstaller_download_preserves_active_installation(self):
+        self.f.run_install('--service',service=True)
+        before={n:(self.root/n).read_bytes() for n in ('menu.sh','uninstall.sh','bin/shell-wol','.shell-wol-install')}
+        self.f.make_release('v1.2.4')
+        self.f.env['CORRUPT_CDN_SUFFIX']='/scripts/uninstall.sh'
+        self.f.run_install('--source','jsdelivr',service=True,success=False)
+        for n,data in before.items():self.assertEqual((self.root/n).read_bytes(),data)
+        self.assertTrue((self.f.service/'active').exists())
 
     def test_service_dispatch_and_stop_keeps_autostart(self):
         self.f.run_install('--service',service=True)

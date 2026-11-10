@@ -157,7 +157,7 @@ main "$3"
     assert not (fixture.root / '.install-lock').exists()
     assert (data / '.lock').is_file()
     subprocess.run([str(installed),'lock','--data-dir',str(data)],check=True,stdout=subprocess.DEVNULL)
-    uninstall = ['sh', str(Path(__file__).resolve().parents[2] / 'scripts/uninstall.sh'),
+    uninstall = ['sh', str(fixture.root / 'uninstall.sh'),
                  '--user', '--install-dir', str(fixture.root), '--yes']
     subprocess.run(uninstall, check=True, stdout=subprocess.DEVNULL)
     assert not installed.exists() and config.read_bytes() == before
