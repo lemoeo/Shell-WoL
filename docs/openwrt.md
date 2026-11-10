@@ -38,17 +38,77 @@ free
 
 ## 2. 安装器部署（推荐）
 
-详见 [安装与升级指南](install.md)。从仓库下载 `scripts/install.sh`，在路由器上以 root 执行。程序从 Release 下载，服务模板和校验清单从相同版本的仓库标签下载：
+详见 [安装与升级指南](install.md)。从仓库下载 `scripts/install.sh`，在路由器上以 root 执行。支持 GitHub 和 jsDelivr 源；二进制和模板始终固定到同一版本：
 
 ```sh
 sh install.sh --service
+# 使用 ShellCrash 中的 CDN 域名
+sh install.sh --source jsdelivr --cdn-base https://testingcf.jsdelivr.net --service
 ```
 
+未传 `--source` 时使用 GitHub，下载失败直接停止；`--source jsdelivr` 使用所选 CDN，不自动换源。`--cdn-base` 或 `SHELL_WOL_CDN_BASE` 可修改 CDN 源站，地址不带 `/gh`。也可直接从该 CDN 的 `/gh/lemoeo/Shell-WoL@main/scripts/install.sh` 获取入口。CDN 二进制必须由发布或同步工作流先补齐资产标签，见 [安装源和 CDN](install.md#安装源和-cdn)。
+
 可以显式指定 `--version v0.1.0`、`--arch mipsle`、`--install-dir /持久化目录/shell-wol`。没有 curl 或支持证书校验的完整 wget 时，先用固件支持的方式安装下载工具及 CA 证书；不要关闭校验。
+
+SHA256 校验不要求独立安装 GNU 工具：安装、卸载和持久自启依次探测 `sha256sum`、`busybox sha256sum`、`shasum -a 256`、`openssl dgst -sha256`，通过实际计算验证可用性。如果 BusyBox 包含 sha256sum applet，即使没有同名独立命令也可以使用；全部不可用时会报错并停止。详细说明见 [校验工具兼容](install.md#发布前提与安装入口)。
 
 默认根目录：标准 OpenWrt 为 `/etc/shell-wol`；检测到小米特征 `/data/etc/crontabs/root` 且 `/data` 可写时，为 `/data/shell-wol`。根目录下 `bin/shell-wol` 是程序，`data/` 是 YAML，`backup/` 是升级备份。请确认所选分区持久可写；程序和数据不能放在重启即清空的 `/tmp`。
 
 默认关闭路由器操作记录（`log_limit: 0`）。首次安装不设置密码；`--service` 会直接注册并启动服务，可在浏览器完成初始化。默认监听本机，局域网访问需显式修改监听地址。
+
+### 镜像固件的持久自启动
+
+参考 ShellCrash，以 `/data/etc/crontabs/root` 存在且 `/data` 可写识别小米镜像固件；不会因为版本字符串包含 `SNAPSHOT` 就采用特殊启动方式。普通 OpenWrt Snapshot 若具有持久 overlay，继续使用原生 procd 即可。
+
+小米镜像固件首次注册服务时，默认自动选择 firewall 模式：
+
+```sh
+sh install.sh --service --yes
+# 显式选择；安装器会检查 procd、uci 和 ubus
+sh install.sh --service --boot-mode firewall --install-dir /data/shell-wol --yes
+# 确认 /etc 可以持久保存的固件可使用原生方式
+sh install.sh --service --boot-mode native --yes
+```
+
+安装器在 `/data/shell-wol` 保留 `boot.sh` 和 `service/shell-wol.procd`，注册如下入口（路径跟随安装目录）：
+
+```text
+firewall.ShellWoL=include
+firewall.ShellWoL.type=script
+firewall.ShellWoL.path=/data/shell-wol/boot.sh
+firewall.ShellWoL.enabled=1
+```
+
+检测到 fw4 时额外设置 `fw4_compatible=1`。不修改其他 include、SSH、NVRAM 或端口规则，也不为注册入口重启防火墙。存在其他未提交的 firewall 配置时先中止，避免顺带提交。
+
+启动链路为：开机防火墙执行 include → `boot.sh` 启动后台恢复任务并立即返回 → 等待 procd 和配置就绪 → 校验持久副本、按需恢复 `/etc/init.d/shell-wol` → 通过 procd 启动。等待与 Web 就绪检查共享约 60 秒预算（正在执行的检查可能额外占用几秒），不会等待互联网；初始化后的服务仍由 procd 守护。已有运行服务直接跳过，重复触发通过锁去重，不会停止或重启现有服务；遇到数据锁、服务归属冲突或校验失败时停止处理，使用 `logread -e shell-wol-boot` 查看原因。此模式不依赖 `/etc/rc.d` 自启链接；防火墙操作是否重跑 include 取决于固件及 fw3/fw4 行为。
+
+**前提：firewall UCI 配置确实能被该固件持久保存，而且开机时执行 script include。** `uci commit` 本身无法保证任意重置文件系统都持久化。小米 firewall 模式限定安装到开机即可访问的 `/data` 子目录，不支持把入口放到尚未挂载的 USB 分区；其他兼容固件显式选择该模式时也需自行确认路径在防火墙启动前可访问。为兼容 fw3 对脚本路径的处理，此模式安装目录不能含空格。
+
+自启动开关使用持久脚本管理：
+
+```sh
+sh /data/shell-wol/boot.sh status
+sh /data/shell-wol/boot.sh disable  # 关闭下次自启动，不停止当前服务
+/etc/init.d/shell-wol stop
+
+sh /data/shell-wol/boot.sh enable   # 恢复自启动，不立即启动
+sh /data/shell-wol/boot.sh          # 后台恢复并按需启动
+sh /data/shell-wol/boot.sh run      # 前台恢复，便于查看错误
+```
+
+`disable` 同时记录持久禁用标记并提交 include 的启用状态；升级保留该状态。不要仅依赖 `/etc/init.d/shell-wol disable`，它只操作原生启动链接。如果需要保持服务停止，先禁用持久自启，再停止服务。
+
+安装器不会自动重启路由器。自行安排重启验证后，检查：
+
+```sh
+uci show firewall.ShellWoL
+/etc/init.d/shell-wol running
+logread -e shell-wol-boot
+logread -e shell-wol
+```
+
+只有目标型号和固件完成重启验证后，才能确认该机制在该设备上可用。
 
 ## 3. 初始化和 LAN 访问
 
@@ -71,7 +131,7 @@ logread -e shell-wol
 
 不能在线下载时，可从电脑上传匹配的二进制到持久化根目录的 `bin/shell-wol`，授予执行权限，在 `data/` 初始化，再用 `serve --data-dir` 手动运行。不要直接复制 `deploy/shell-wol.openwrt` 启动：它是包含 `@ROOT@` 的模板，需要填入实际根目录。
 
-自动服务要求 `/etc/rc.common`、procd 库且 PID 1 为 procd。没有该能力的厂商固件应按实际服务机制适配，不修改 SSH、防火墙 include 或 NVRAM 来强行安装。
+自动服务要求 `/etc/rc.common`、procd 库且 PID 1 为 procd。没有该能力的厂商固件应按实际服务机制适配；firewall include 仅用于恢复已有 procd 能力，不能替代 procd。
 
 服务管理使用 `/etc/init.d/shell-wol stop` 或 `/etc/init.d/shell-wol restart`。异常退出留下 `data/.lock` 时，先停止服务并确认无进程使用该目录，再人工删除空锁目录。不要在进程运行期间删除锁。
 
@@ -91,6 +151,8 @@ sh uninstall.sh --install-dir /etc/shell-wol
 ```
 
 小米兼容固件的默认根目录是 `/data/shell-wol`，外置存储使用实际安装路径。默认停止并禁用 procd 服务、移除程序，保留数据。只有显式指定 `--purge` 才删除已知 YAML 和文件日志；未知文件、系统日志及账户保留。卸载不比较服务文件摘要；服务路径不属于本安装、运行锁遗留或仍有手动运行进程时中止，不自动杀进程或删锁。完整范围见 [卸载与重新安装](install.md#卸载与重新安装)。
+
+firewall 模式使用最新版卸载器：先移除本安装的 include，阻止恢复任务重新拉起服务，再停止 procd 并删除持久启动脚本和副本。即使 `/etc/init.d/shell-wol` 已重置，也会用验证通过的持久副本完成服务清理。`--dry-run` 只展示这些操作。
 
 ## 兼容性验证与排查
 

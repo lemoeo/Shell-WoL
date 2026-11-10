@@ -20,7 +20,7 @@
 
 ## 安装
 
-macOS、Linux 和兼容路由器可使用 [安装脚本](scripts/install.sh)，完整选项见 [安装与升级指南](docs/install.md)。安装入口与服务模板从仓库下载，二进制从 GitHub Release 下载；源码推送本身不会发布二进制安装包。
+macOS、Linux 和兼容路由器可使用 [安装脚本](scripts/install.sh)，完整选项见 [安装与升级指南](docs/install.md)。支持 GitHub 和 jsDelivr 两种安装源，默认使用 GitHub，下载失败时停止；源码推送本身不会发布二进制安装包。
 
 程序与数据放在同一根目录：Linux 默认 `/opt/shell-wol`，兼容的小米固件默认 `/data/shell-wol`，OpenWrt 默认 `/etc/shell-wol`，macOS 用户默认 `~/Library/Application Support/Shell-WoL`。根目录下分别为 `bin/`、`data/`、`backup/`，服务注册文件使用系统规定的位置。
 
@@ -35,6 +35,19 @@ sh install.sh --user --yes
 ```
 
 安装器支持版本固定、SHA256 校验、保留数据升级和可选后台服务，不自动开放局域网访问。首次注册服务会直接启动；尚未设置管理员密码时，通过浏览器输入服务日志中的初始化令牌完成设置。
+
+GitHub 无法访问时，也可以从 CDN 获取安装入口并使用同一 CDN 安装。地址可切换为 ShellCrash 使用的 `testingcf.jsdelivr.net`：
+
+```sh
+curl --fail --location --proto '=https' --proto-redir '=https' \
+  https://testingcf.jsdelivr.net/gh/lemoeo/Shell-WoL@main/scripts/install.sh \
+  --output install.sh
+sh install.sh --source jsdelivr --cdn-base https://testingcf.jsdelivr.net
+```
+
+默认 CDN 为 `https://cdn.jsdelivr.net`；可用 `--cdn-base` 或环境变量 `SHELL_WOL_CDN_BASE` 修改。CDN 二进制需要先由发布流程同步 `assets-版本` 标签，已有 Release 可通过 **Sync CDN assets** 工作流补齐，见 [安装源和 CDN](docs/install.md#安装源和-cdn)。
+
+小米镜像固件（检测到 `/data/etc/crontabs/root` 且 `/data` 可写）注册后台服务时，默认使用持久化 `firewall.ShellWoL` include：启动 `/data/shell-wol/boot.sh`，恢复可能被重置的 `/etc/init.d/shell-wol`，交由 procd 管理。普通 OpenWrt 继续使用原生 procd 自启动；可通过 `--boot-mode native|firewall` 显式选择。该机制不增加端口放行规则，要求固件持久保存 firewall UCI 配置，实际重启仍需目标设备验证。禁用、恢复和排查见 [镜像固件自启动](docs/openwrt.md#镜像固件的持久自启动)。
 
 ## 卸载
 

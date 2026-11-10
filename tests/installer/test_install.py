@@ -38,15 +38,19 @@ if [ "$required" = 1 ]; then grep -q 'password_hash: ready' "$data/config.yaml" 
 if [ "$running" = 1 ] && [ "${FAIL_RUNNING_VERSION:-}" = "$version" ]; then exit 7; fi
 '''
 CURL = r'''#!/usr/bin/env python3
-import os, pathlib, shutil, sys
+import json, os, pathlib, shutil, sys
 args=sys.argv[1:]
 assert '--proto' in args and args[args.index('--proto')+1]=='=https'
 assert '--proto-redir' in args and args[args.index('--proto-redir')+1]=='=https'
 url=args[-1]; assert url.startswith('https://')
 root=pathlib.Path(os.environ['FIXTURE_ROOT'])
 with (root/'downloads').open('a') as log:log.write(url+'\n')
+out=pathlib.Path(args[args.index('--output')+1])
+if any(url.startswith(prefix) for prefix in json.loads(os.environ.get('FAIL_URL_PREFIXES','[]'))):
+ out.write_text('partial failed download');sys.exit(22)
 release=os.environ['FIXTURE_RELEASE_BASE'].rstrip('/')+'/'
 repo=os.environ['FIXTURE_REPO_BASE'].rstrip('/')+'/'
+cdn=os.environ.get('FIXTURE_CDN_BASE','https://cdn.jsdelivr.net').rstrip('/')+'/gh/lemoeo/Shell-WoL@'
 if url.startswith(release):
  tail=url[len(release):].split('/')
  if tail==['latest','download','VERSION']:source=root/'assets'/'VERSION'
@@ -56,9 +60,19 @@ elif url.startswith(repo):
  tail=url[len(repo):].split('/')
  if len(tail)==3 and tail[1]=='deploy':source=root/'repository'/tail[0]/tail[1]/tail[2]
  else:sys.exit(22)
+elif url.startswith(cdn):
+ tail=url[len(cdn):].split('/')
+ if tail==['assets','VERSION']:
+  version=os.environ.get('CDN_VERSION')
+  source=(root/'releases'/version/'VERSION') if version else root/'assets'/'VERSION'
+ elif len(tail)==2 and tail[0].startswith('assets-v'):source=root/'releases'/tail[0][7:]/tail[1]
+ elif len(tail)==3 and tail[1]=='deploy':source=root/'repository'/tail[0]/tail[1]/tail[2]
+ else:sys.exit(22)
+ if os.environ.get('CORRUPT_CDN_SUFFIX') and url.endswith(os.environ['CORRUPT_CDN_SUFFIX']):
+  out.write_text('corrupt CDN response');sys.exit(0)
 else:sys.exit(22)
 if not source.is_file():sys.exit(22)
-shutil.copyfile(source,args[args.index('--output')+1])
+shutil.copyfile(source,out)
 '''
 SYSTEMCTL = r'''#!/bin/sh
 folder=$FIXTURE_SERVICE

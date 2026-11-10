@@ -1,0 +1,44 @@
+name: Sync CDN assets
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Existing published Release version, e.g. v0.1.2
+        required: true
+        type: string
+      update_latest:
+        description: Update CDN latest if this is a newer stable version
+        default: true
+        type: boolean
+permissions:
+  contents: write
+concurrency:
+  group: shell-wol-release-assets
+  cancel-in-progress: false
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download existing Release files without rebuilding
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          printf '%s\n' "$RELEASE_VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9]+([.-][A-Za-z0-9]+)*)?$'
+          state=$(gh release view "$RELEASE_VERSION" --json isDraft,isPrerelease --jq 'if .isDraft then "draft" elif .isPrerelease then "prerelease" else "stable" end')
+          [ "$state" != draft ] || { echo 'Draft releases cannot be synchronized'; exit 1; }
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+          gh release download "$RELEASE_VERSION" --dir "$RUNNER_TEMP/cdn-assets" \
+            --pattern VERSION --pattern SHA256SUMS --pattern 'shell-wol-*'
+      - name: Publish verified immutable snapshot
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: bash scripts/publish-assets.sh snapshot "$RELEASE_VERSION" "$RUNNER_TEMP/cdn-assets"
+      - name: Update CDN latest version
+        if: ${{ inputs.update_latest && steps.release.outputs.state == 'stable' }}
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: bash scripts/publish-assets.sh latest "$RELEASE_VERSION"

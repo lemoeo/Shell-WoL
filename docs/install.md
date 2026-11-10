@@ -4,7 +4,7 @@
 
 ## 发布前提与安装入口
 
-维护者推送 `v主版本.次版本.补丁` 标签后，GitHub Actions 执行测试、交叉编译并发布 Release。预发布标签可使用 `v0.1.0-beta.1`，会标记为 prerelease。Release 只上传各平台二进制、VERSION 和二进制 SHA256SUMS。安装脚本和三份服务模板保留在仓库，不作为 Release 附件；仅推送源码不会自动发布二进制。没有 Release 时，可先使用本地构建。
+维护者推送 `v主版本.次版本.补丁` 标签后，GitHub Actions 执行测试、交叉编译、发布固定的 CDN 资产标签，再发布 Release 并更新 CDN 最新版本。预发布标签可使用 `v0.1.0-beta.1`，会标记为 prerelease，且不更新 CDN 最新版本。Release 只上传各平台二进制、VERSION 和二进制 SHA256SUMS；CDN 同步相同构建文件。安装脚本和三份服务模板保留在源码仓库，不作为 Release 附件；仅推送源码不会自动发布二进制。没有 Release 时，可先使用本地构建。
 
 从仓库 main 分支下载最新安装入口，查看后运行：
 
@@ -19,20 +19,60 @@ sh install.sh
 
 文件来源如下：
 
-| 内容 | 默认来源 |
-| --- | --- |
-| 安装入口 | 仓库 main 的 `scripts/install.sh`，也可固定标签 |
-| 最新正式版本信息 | Release 的 `latest/download/VERSION` |
-| 二进制及其 SHA256SUMS | Release 的 `download/<版本>/` |
-| 服务模板及其 SHA256SUMS | 仓库的 `<同版本标签>/deploy/` |
+| 内容 | GitHub 源 | jsDelivr 源 |
+| --- | --- | --- |
+| 安装入口 | 源码 `main/scripts/install.sh` | 源码 `@main/scripts/install.sh` |
+| 最新正式版本信息 | Release 的 `latest/download/VERSION` | 资产分支 `@assets/VERSION` |
+| 二进制及其 SHA256SUMS | Release 的 `download/<版本>/` | 固定资产标签 `@assets-<版本>/` |
+| 服务模板及其 SHA256SUMS | 源码 `<版本>/deploy/` | 源码 `@<版本>/deploy/` |
 
-首次解析 latest 后，二进制与模板全部固定到同一版本；不允许把新 main 的模板静默用于旧二进制。下载模板或其摘要失败就停止，不回退到 main 或 Release 中的旧模板。
+首次解析 latest 后，二进制与模板全部固定到同一版本，不会改用 main 或旧版模板。仅访问所选源，下载或校验失败直接停止；需要换源时重新执行并指定 `--source`。
 
 旧 Release 已上传的脚本和模板无需删除。**旧标签如果没有 `deploy/SHA256SUMS`，新安装器无法为该版本自动安装服务**；可使用原配套安装方式，或不加 `--service` 只安装程序并手动运行。已有受管理服务的升级会保留服务类型，因此也需要选择包含模板清单的新标签。不要移动旧标签来补文件；应提交文件并发布新版本。
 
 支持有证书校验及 `--https-only` 的 wget；精简 BusyBox wget 不一定具备这些能力，遇到提示应先通过固件支持的方式安装 curl 和 CA 证书，不能跳过 TLS 校验。
 
-交互模式显示系统、固件、架构及推荐根目录，允许修改目录、选择后台服务，最后确认安装。通过 `/dev/tty` 读取选择；自动化环境使用 `--yes`。脚本不自行调用 sudo 提权；macOS 普通用户默认用户安装，Linux 系统安装需管理员执行。
+安装器、卸载器和生成的持久启动脚本保留 SHA256 校验，按以下顺序选择可用工具：`sha256sum` → `busybox sha256sum` → `shasum -a 256` → `openssl dgst -sha256`。探测会实际计算空输入并核对已知摘要；独立命令缺失、BusyBox 未编入对应 applet、执行失败或输出无效时，继续尝试下一种。四种方式都不可用时明确报错并停止，不跳过校验。
+
+精简小米固件没有独立的 `sha256sum` 命令时，可以先用 `busybox sha256sum /dev/null` 或 `openssl dgst -sha256 /dev/null` 检查已有能力，无需先安装完整 GNU 工具。选定工具后，文件读取或校验失败仍会中止，已有安装不会因这类失败被替换。
+
+交互模式显示系统、固件、架构及推荐根目录，允许选择安装源、修改目录、选择后台服务，最后确认安装。通过 `/dev/tty` 读取选择；自动化环境使用 `--yes`。脚本不自行调用 sudo 提权；macOS 普通用户默认用户安装，Linux 系统安装需管理员执行。
+
+## 安装源和 CDN
+
+`--source github|jsdelivr` 控制本次安装或升级，不提供 auto 选项：
+
+- `github`（默认，未传 `--source` 时使用）：只使用 GitHub Release 和 raw 源，失败时停止。
+- `jsdelivr`：只使用配置的 CDN，失败时停止，不隐式切换其他域名。
+
+`--cdn-base` 是 HTTPS 源站地址，不带 `/gh` 或仓库路径。默认 `https://cdn.jsdelivr.net`，可改为 `https://testingcf.jsdelivr.net`；环境变量 `SHELL_WOL_CDN_BASE` 可以设置 CDN 默认地址，命令行优先。安装源不受环境变量覆盖，使用 `--source` 或交互菜单显式选择；源选择不写入应用 YAML，每次执行可调整。
+
+```sh
+# 默认 CDN
+sh install.sh --source jsdelivr --service --yes
+
+# ShellCrash 使用的 Cloudflare CDN 域名
+sh install.sh --source jsdelivr --cdn-base https://testingcf.jsdelivr.net --service --yes
+
+# 在当前终端设置 CDN 默认地址，后续无需重复传 --cdn-base
+export SHELL_WOL_CDN_BASE=https://testingcf.jsdelivr.net
+sh install.sh --source jsdelivr --service --yes
+```
+
+安装入口本身也需要可访问。通过 CDN 下载入口的示例（替换域名即可切换）：
+
+```sh
+curl --fail --location --proto '=https' --proto-redir '=https' \
+  https://cdn.jsdelivr.net/gh/lemoeo/Shell-WoL@main/scripts/install.sh \
+  --output install.sh
+sh install.sh --source jsdelivr
+```
+
+以 `v0.1.2` 为例，二进制使用 `https://cdn.jsdelivr.net/gh/lemoeo/Shell-WoL@assets-v0.1.2/shell-wol-linux-arm64`，模板使用 `https://cdn.jsdelivr.net/gh/lemoeo/Shell-WoL@v0.1.2/deploy/shell-wol.openwrt`。jsDelivr 读取仓库文件，不能直接镜像 Release 附件；维护者必须先同步资产标签。旧 Release 未同步时，CDN 安装会失败，可重新执行脚本并选择 GitHub 源。
+
+CDN 的分支文件可能有缓存延迟；只用 `@assets/VERSION` 解析一次版本，其余文件从固定标签读取，避免新旧文件混用。需要指定刚发布版本时使用 `--version v0.1.2`；缓存中的旧入口脚本也可通过源码版本标签或提交 SHA 下载固定版本。固定标签不可移动或覆盖。
+
+元数据连接超时为 5 秒，VERSION 请求上限 10 秒、校验清单和模板上限 20 秒、二进制下载上限 180 秒（curl）；wget 使用对应的单次超时并关闭自动多次重试。网络失败、SHA256 不匹配、版本不符或配置错误都会停止，不自动换源。
 
 ## 路径与选项
 
@@ -45,14 +85,16 @@ sh install.sh
 | macOS 系统安装（root 执行） | `/Library/Application Support/Shell-WoL` |
 | Linux `--user` | `${XDG_DATA_HOME:-~/.local/share}/shell-wol` |
 
-固件特征只用于推荐位置，并不保证该型号兼容。小米特征优先于通用 OpenWrt；刷入标准 OpenWrt 且没有该特征的设备使用 OpenWrt 路径。安装前仍需确认所选分区可执行、持久可写且空间足够。Linux 内核环境下即使固件来源未知，也可只安装程序并手动运行；无法识别服务机制时 `--service` 会失败。
+固件特征用于推荐位置及自动选择启动方式，并不保证该型号兼容。小米特征优先于通用 OpenWrt；刷入标准 OpenWrt 且没有该特征的设备使用 OpenWrt 路径。安装前仍需确认所选分区可执行、持久可写且空间足够。Linux 内核环境下即使固件来源未知，也可只安装程序并手动运行；无法识别服务机制时 `--service` 会失败。
 
 ```text
 安装根目录/
 ├── bin/shell-wol
 ├── data/                 YAML 数据及凭据密钥；初始化后默认私有权限
 ├── backup/shell-wol.previous
-└── .shell-wol-install    安装器版本、服务及服务文件摘要
+├── boot.sh              仅 firewall 启动模式，由安装器生成
+├── service/shell-wol.procd  仅 firewall 模式，服务文件的持久副本
+└── .shell-wol-install    安装器版本、服务、启动模式及文件摘要
 ```
 
 ```sh
@@ -69,11 +111,20 @@ sh install.sh --user --install-dir "$HOME/Apps/shell-wol" --yes
 sh install.sh --arch mipsle --service --yes
 ```
 
-支持参数：`--version`、`--arch`、`--install-dir`、`--user`、`--service`、`--yes`、`--download-base`、`--repo-base` 和 `--help`。
+支持参数：`--version`、`--arch`、`--install-dir`、`--user`、`--service`、`--boot-mode`、`--yes`、`--source`、`--cdn-base`、`--download-base`、`--repo-base` 和 `--help`。
+
+`--boot-mode auto|native|firewall` 需配合 `--service` 或已有后台服务：
+
+- `auto`（默认）：保留已记录的启动模式；没有模式记录时，检测到小米固件且使用 procd 就选择 firewall，其他系统使用 native。因此旧安装器创建的小米 procd 安装可在升级时自动迁移。
+- `native`：沿用 systemd、procd 或 launchd 自启动；从 firewall 模式切换时移除本安装的 include 和持久启动文件。
+- `firewall`：仅支持系统级 procd，要求 uci、ubus 及可用的 firewall 配置。为兼容 fw3 未引用 include 路径的行为，此模式安装目录不能含空格。小米设备须使用 `/data` 下的独立目录，确保启动脚本在防火墙启动时已经可访问。不会自动回退到可能无法持久化的原生启动方式。
+
+`boot.sh` 内置于安装器并在安装时生成；procd 模板仍从二进制的同版本标签下载并校验。这项脚本功能不需要新二进制 Release。详细启动链路、前提及管理命令见 [路由器持久自启动](openwrt.md#镜像固件的持久自启动)。
 
 - `--download-base` 是 HTTPS Release 根地址，镜像保持 `latest/download/VERSION` 和 `download/<版本>/<资产名>` 结构。
 - `--repo-base` 是 HTTPS 仓库文件根地址，不包含分支或标签；镜像保持 `<版本标签>/deploy/SHA256SUMS` 和 `<版本标签>/deploy/<模板名>` 结构。
 - 两类地址独立配置，不会用 Release 镜像地址推断仓库镜像。模板仍固定到二进制版本标签；同一版本的内容不应随意替换。
+- 显式自定义地址优先于 `--source`，对应文件只访问该镜像，失败时不会隐式回退官方源；另一类文件仍遵循所选源策略。jsDelivr 使用独立的 `@版本` 地址格式，应通过 `--cdn-base` 配置，不能把 CDN 地址直接传给 `--repo-base` 或 `--download-base`。
 
 例如：
 
@@ -91,7 +142,7 @@ sh install.sh --version v0.1.0 \
 
 ## 首次密码与服务启动
 
-首次安装执行不含密码的 `init`，生成默认 YAML；路由器默认 `log_limit: 0`，减少操作记录写闪存。安装器不接收或保存密码、不改变 LAN 监听和防火墙。默认只监听 `127.0.0.1:8080`。
+首次安装执行不含密码的 `init`，生成默认 YAML；路由器默认 `log_limit: 0`，减少操作记录写闪存。安装器不接收或保存密码、不改变 LAN 监听和端口规则；firewall 模式仅注册本工具的启动 include。默认只监听 `127.0.0.1:8080`。
 
 服务模式检测如下：
 
@@ -104,7 +155,7 @@ sh install.sh --version v0.1.0 \
 
 系统安装的程序及元数据由安装账户管理，后台服务仅需写 data；用户安装的程序与服务属于同一账户。服务文件放在操作系统要求的 systemd/init.d/LaunchAgents/LaunchDaemons 目录。模板由安装器填充，不能直接复制含 `@ROOT@` 的模板启动。
 
-`--service` 会注册、启用并启动服务，尚未设置管理员密码也能启动。安装器使用 `check --running` 请求实际 Web 接口验证就绪；“待初始化”和“已初始化”均属于可用的服务状态。
+首次使用 `--service` 会注册、启用并启动服务，尚未设置管理员密码也能启动。安装器使用 `check --running` 请求实际 Web 接口验证就绪；“待初始化”和“已初始化”均属于可用的服务状态。firewall 模式的升级保留原有启用/禁用及运行/停止状态。
 
 首次通过浏览器设置密码：
 
@@ -146,7 +197,10 @@ sudo cat "/Library/Application Support/Shell-WoL/data/service.log"
 - 启动失败会尝试恢复旧程序、服务文件、安装元数据和原有启用/运行状态，并明确报告恢复失败。数据不做跨版本迁移；将来若有格式变化，需另行制定迁移与数据备份流程。
 - 安装器拒绝覆盖不属于本安装的服务文件，以及摘要发生变化的用户定制服务文件。应备份后人工合并。
 - 目标非空且没有安装元数据时拒绝覆盖；老版手动安装需先停止服务、备份数据，选择新目录安装，再在服务停止时迁移 YAML。路径更换需人工迁移服务文件。
-- 异常退出遗留数据锁 `data/.lock` 或安装锁 `.install-lock` 时，需分别确认没有服务或安装进程后人工处理。不会修改厂商 SSH、防火墙或 NVRAM。
+- firewall 模式还备份和回滚本安装的 include、持久启动文件及禁用标记；发现其他未提交的 firewall 修改或同名 section 指向其他安装时停止，不会覆盖 ShellCrash 或其他 section。切换到 native 时同样清理和回滚本安装入口。
+- 异常退出遗留数据锁 `data/.lock` 或安装锁 `.install-lock` 时，需分别确认没有服务或安装进程后人工处理。持久启动操作使用 `/tmp/shell-wol-boot.lock` 与安装、卸载互斥；只清理自己创建的锁，不自动删除其他遗留锁。不会修改厂商 SSH、NVRAM 或端口规则。
+
+firewall 安装使用 schema 2 元数据，旧版安装器/卸载器会拒绝处理，防止遗漏启动入口；请使用仓库最新的安装和卸载脚本。普通 native 安装继续使用 schema 1。
 
 程序版本正确不等于该固件上的广播、开机启动都已验证；macOS launchd、真实 systemd/procd 与路由器仍需对应系统实测。当前安装器测试在 Linux 运行，下载、服务管理的故障场景使用隔离夹具验证。
 
@@ -188,6 +242,7 @@ sudo sh uninstall.sh --install-dir /opt/shell-wol --purge
 | 内容 | 默认 | `--purge` |
 | --- | --- | --- |
 | 受管理的服务文件及开机启动 | 移除 | 移除 |
+| 本安装的 firewall include、`boot.sh`、持久 procd 副本及禁用标记 | 移除 | 移除 |
 | `bin/shell-wol`、`backup/shell-wol.previous` | 删除 | 删除 |
 | `data/config.yaml`、`devices.yaml`、`events.yaml` | 保留 | 删除 |
 | `data/service.log`、`service.err.log` | 保留 | 删除 |
@@ -197,11 +252,13 @@ sudo sh uninstall.sh --install-dir /opt/shell-wol --purge
 
 脚本先验证安装元数据及服务命令的实际安装路径，再停止和禁用对应 systemd/procd/launchd 服务，确认服务停止后检查数据锁和本安装的可见运行进程。不会按进程名批量杀进程，也不直接递归删除根目录。仅删除明确列出的文件，最后尝试移除空目录。
 
+firewall 模式在停止服务前，先写入持久禁用标记并移除本安装的 `firewall.ShellWoL`。如果 `/etc/init.d/shell-wol` 已丢失，从校验通过的持久副本恢复它，用于查询并停止原 procd 服务。预览不会恢复文件或提交 UCI；入口已移除但后续停止失败时，程序和数据保留且自启动维持禁用，修复后可以重试。
+
 卸载器不再比较服务文件与安装记录中的摘要。修正 WorkingDirectory 引号、添加注释或调整服务参数后，只要服务命令仍指向本安装的程序和数据目录，就可卸载；不需要修改或重算元数据中的 `service_sha256`。如果服务指向另一个安装目录，仍会拒绝处理。此调整仅适用于卸载，安装器升级时对定制服务文件的覆盖保护保持不变。
 
 卸载使用和安装器相同的 `.install-lock` 防止并发，并在确认没有已有运行锁后临时创建自己的数据锁，防止常规服务同时重启。只清理自己创建的锁。检测到手动运行进程、遗留运行锁、无法判断服务状态、服务指向其他安装目录或路径为符号链接时，会中止；请先人工确认，不要盲目删除锁。Linux 检查可读取的 `/proc` 可执行路径，macOS 使用 ps；执行期间不要在另一个终端绕过数据锁启动程序。
 
-服务停止、禁用或重新加载失败时，不继续删除程序和数据；已经完成的服务操作可能保留。处理错误后可再次执行：原服务已停止、已卸载或文件已不存在且状态仍可确认时可继续；procd 脚本缺失导致无法查询状态时需先人工处理。脚本不删除系统服务账户，以保持保留数据的归属，并支持重新安装。
+服务停止、禁用或重新加载失败时，不继续删除程序和数据；已经完成的服务操作可能保留。处理错误后可再次执行：原服务已停止、已卸载或文件已不存在且状态仍可确认时可继续；普通 native procd 安装的脚本缺失，或 firewall 安装连持久副本也不可用时，需先人工处理。脚本不删除系统服务账户，以保持保留数据的归属，并支持重新安装。
 
 默认卸载后直接用安装器指定原根目录重新安装，YAML 会保留；需要恢复后台服务时选择 `--service`。清除后若目录已不存在，再次卸载会正常提示无需处理。如果 `--purge` 后仍有未知文件，则目录保留且元数据已移除；再次操作会拒绝把它当作受管理安装，重新安装应选择空目录或先人工迁移未知文件。没有安装元数据的手动安装也需人工卸载。
 
@@ -217,7 +274,24 @@ go build -ldflags='-X main.version=v0.0.0-test' -o bin/shell-wol-install-test ./
 python3 tests/installer/smoke_native.py bin/shell-wol-install-test
 ```
 
-Release 工作流仅在推送版本标签时运行；准备好版本后再推送标签。上述本地命令只生成文件，不发布。`dist/` 只包含二进制、VERSION、SHA256SUMS；Release 的 SHA256SUMS 仅列出二进制。构建脚本会清理旧版生成的 install.sh 与三份模板副本，不删除其他用户文件。校验工具兼容 sha256sum 与 macOS shasum。
+Release 工作流仅在推送版本标签时运行；准备好版本后再推送标签。上述本地命令只生成文件，不发布。`dist/` 只包含二进制、VERSION、SHA256SUMS；Release 的 SHA256SUMS 仅列出二进制。构建脚本会清理旧版生成的 install.sh 与三份模板副本，不删除其他用户文件。构建侧校验工具兼容 sha256sum 与 macOS shasum；设备端安装、卸载和持久启动另支持 BusyBox 与 OpenSSL。
+
+### CDN 资产发布与旧版本补齐
+
+Release 工作流使用 `scripts/publish-assets.sh` 创建独立资产树，先推送 `assets-v具体版本` 标签，再发布 GitHub Release，最后把专用 `assets` 分支指向最新稳定快照。标签包含九个平台二进制、VERSION、SHA256SUMS 及归属标记，不包含源码、模板或多版本目录。使用私有 Git 索引，不切换或修改源码工作区；历史资产通过固定标签保留。
+
+脚本验证九个文件的名称、摘要及 CDN 大小限制（单文件 20 MB、总量 150 MB），忽略目录中的其他文件。已有资产标签只允许内容完全相同的重复操作，内容不同则拒绝，不移动旧标签。最新分支有归属检查和并发更新保护；预发布和较旧版本的补齐不会替换较新的最新版本。`assets` 是程序管理的专用分支，请勿在其中放置自定义文件。
+
+已有 Release（例如 `v0.1.2`）无需重新编译或重新发布程序：
+
+1. 将本次工作流推送到仓库默认分支。
+2. 在 GitHub **Actions → Sync CDN assets → Run workflow** 中填写现有版本，例如 `v0.1.2`。
+3. 保持 `update_latest` 启用，脚本仅在该版本是较新的稳定版本时更新最新指针。
+4. 工作流下载原 Release 文件并验证摘要，发布对应资产标签。完成后再用 `--source jsdelivr --version v0.1.2` 测试。
+
+此手动工作流不修改已有 Release 附件，也不重新构建二进制。仅运行本地构建或推送安装脚本，不能让缺失的 CDN 二进制自动出现。
+
+补齐要求原 Release 含当前九个平台二进制、VERSION 和匹配的二进制 SHA256SUMS；缺文件、清单格式不符或摘要不匹配会停止。Release 工作流重试时，如果 Release 已发布，会比较 VERSION 和 SHA256SUMS，仅一致时继续恢复最新分支，不覆盖已有附件或草稿。
 
 
 服务模板修改后必须运行：

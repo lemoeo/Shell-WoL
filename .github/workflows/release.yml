@@ -4,6 +4,9 @@ on:
     tags: ['v*']
 permissions:
   contents: read
+concurrency:
+  group: shell-wol-release-assets
+  cancel-in-progress: false
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -33,7 +36,31 @@ jobs:
         env:
           VERSION: ${{ github.ref_name }}
         run: ./scripts/build.sh
+      - name: Verify an existing Release before publishing CDN files
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          if existing=$(gh release view "$RELEASE_VERSION" --json isDraft --jq .isDraft 2> "$RUNNER_TEMP/release-view.err"); then
+            [ "$existing" = false ] || { echo 'Existing Release is a draft; refusing to change it'; exit 1; }
+            gh release download "$RELEASE_VERSION" --dir "$RUNNER_TEMP/existing-release" \
+              --pattern VERSION --pattern SHA256SUMS
+            cmp dist/VERSION "$RUNNER_TEMP/existing-release/VERSION"
+            cmp dist/SHA256SUMS "$RUNNER_TEMP/existing-release/SHA256SUMS"
+            echo 'present=true' >> "$GITHUB_OUTPUT"
+            echo 'Existing Release matches this build; attachments unchanged.'
+          else
+            # A network/authentication failure is not evidence of a missing Release.
+            grep -Eiq 'HTTP 404|release not found' "$RUNNER_TEMP/release-view.err" || { cat "$RUNNER_TEMP/release-view.err" >&2; exit 1; }
+            echo 'present=false' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish immutable CDN assets
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: bash scripts/publish-assets.sh snapshot "$RELEASE_VERSION" dist
       - name: Publish release
+        if: ${{ steps.existing.outputs.present != 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ github.ref_name }}
@@ -48,3 +75,7 @@ jobs:
           else
             gh release create "$RELEASE_VERSION" "${assets[@]}" --verify-tag --generate-notes
           fi
+      - name: Update CDN latest version
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: bash scripts/publish-assets.sh latest "$RELEASE_VERSION"

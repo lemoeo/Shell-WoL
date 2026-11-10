@@ -95,6 +95,15 @@ class UninstallTests(unittest.TestCase):
         self.assertTrue((self.root/'data/custom.yaml').exists());self.assertTrue((self.root/'data/empty').exists())
         self.assertFalse((self.root/'data/config.yaml').exists())
         self.assertIn('custom.yaml',result.stdout)
+    def test_native_uninstall_preserves_unrelated_boot_names(self):
+        self.install()
+        outside=self.fixture.base/'outside';outside.write_text('user script')
+        (self.root/'boot.sh').symlink_to(outside)
+        (self.root/'service').write_text('user file')
+        self.uninstall('--purge')
+        self.assertTrue((self.root/'boot.sh').is_symlink())
+        self.assertEqual((self.root/'service').read_text(),'user file')
+        self.assertEqual(outside.read_text(),'user script')
     def test_dry_run_has_no_side_effects(self):
         self.install(service=True)
         before={str(p.relative_to(self.root)):p.read_bytes() for p in self.root.rglob('*') if p.is_file()}

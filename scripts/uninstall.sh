@@ -10,6 +10,9 @@ INSTALL_LOCK=
 OWN_DATA_LOCK=0
 DATA_CREATED=0
 STATE_TMP=
+BOOT_MODE=native
+BOOT_LOCK=/tmp/shell-wol-boot.lock
+OWN_BOOT_LOCK=0
 
 say() { printf '%s\n' "$*"; }
 fail() { say "错误：$*" >&2; exit 1; }
@@ -35,11 +38,43 @@ validate_dir() {
     case "$1/" in /|//|*/../*|*/./*) fail '不能使用 / 或包含 . / .. 路径段的目录' ;; esac
     case "$1" in /etc|/usr|/usr/bin|/usr/local|/opt|/data|/tmp|/var|/home|/Users|/Library) fail '必须指定独立安装子目录' ;; esac
 }
-checksum() {
-    if has sha256sum; then sha256sum "$1" | awk '{print $1}'
-    elif has shasum; then shasum -a 256 "$1" | awk '{print $1}'
-    else return 1; fi
+# BEGIN SHA256 compatibility (also embedded in the persistent boot helper).
+SHA256_TOOL=
+sha256_digest() {
+    # Read stdin so filenames never affect the digest's output format.
+    case "$SHA256_TOOL" in
+        sha256sum) digest_output=$(sha256sum <"$1") || return 1 ;;
+        busybox) digest_output=$(busybox sha256sum <"$1") || return 1 ;;
+        shasum) digest_output=$(shasum -a 256 <"$1") || return 1 ;;
+        openssl) digest_output=$(openssl dgst -sha256 <"$1") || return 1 ;;
+        *) return 1 ;;
+    esac
+    digest_value=$(printf '%s\n' "$digest_output" | LC_ALL=C awk -v tool="$SHA256_TOOL" '
+        NR == 1 {if (tool == "openssl") print $NF; else print $1; next}
+        {exit 1}
+    ') || return 1
+    digest_value=$(printf '%s' "$digest_value" | LC_ALL=C tr 'A-F' 'a-f')
+    [ "${#digest_value}" = 64 ] || return 1
+    case "$digest_value" in *[!0-9a-f]*) return 1 ;; esac
+    printf '%s\n' "$digest_value"
 }
+require_sha256() {
+    [ -z "$SHA256_TOOL" ] || return 0
+    for SHA256_TOOL in sha256sum busybox shasum openssl; do
+        if digest_probe=$(sha256_digest /dev/null 2>/dev/null) &&
+            [ "$digest_probe" = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 ]; then
+            return 0
+        fi
+    done
+    SHA256_TOOL=
+    printf '%s\n' '没有可用的 SHA256 校验工具；已尝试 sha256sum、busybox sha256sum、shasum -a 256、openssl dgst -sha256，请安装或启用其中一种。' >&2
+    return 1
+}
+checksum() {
+    require_sha256 || return 1
+    sha256_digest "$1"
+}
+# END SHA256 compatibility
 state_value() { sed -n "s/^$1=//p" "$STATE"; }
 require_service_permissions() {
     case "$SERVICE" in systemd|procd|launchd-system) [ "$(id -u)" = 0 ] || fail '系统服务卸载需要 root 权限' ;; esac
@@ -66,6 +101,49 @@ verify_service() {
             procd) grep -Fqx "INSTALL_ROOT='$ROOT'" "$SERVICE_FILE" || fail '服务不属于本安装目录' ;;
             launchd-user|launchd-system) grep -Fq "<string>$ROOT/bin/shell-wol</string>" "$SERVICE_FILE" && grep -Fq "<string>$DATA</string>" "$SERVICE_FILE" || fail '服务不属于本安装目录' ;;
         esac
+    fi
+}
+verify_firewall() {
+    [ "$BOOT_MODE" = firewall ] || return 0
+    has uci || fail '清理持久启动入口需要 uci'
+    [ "$(state_value boot_script)" = "$ROOT/boot.sh" ] && [ "$(state_value uci_section)" = ShellWoL ] || fail '持久启动元数据不属于本安装'
+    uci -q show firewall >/dev/null || fail '无法读取 firewall 配置'
+    pending=$(uci -q changes firewall) || fail '无法读取 firewall 待提交配置'
+    [ -z "$pending" ] || fail 'firewall 存在未提交修改，请先处理后重试'
+    if section=$(uci -q get firewall.ShellWoL); then
+        [ "$section" = include ] && [ "$(uci -q get firewall.ShellWoL.path)" = "$ROOT/boot.sh" ] &&
+        [ "$(uci -q get firewall.ShellWoL.type)" = script ] || fail 'firewall.ShellWoL 不属于本安装，停止卸载'
+    fi
+    if [ -f "$ROOT/boot.sh" ]; then
+        grep -Fqx "ROOT='$ROOT'" "$ROOT/boot.sh" || fail '启动脚本不属于本安装'
+    fi
+    if [ -f "$ROOT/service/shell-wol.procd" ]; then
+        grep -Fqx "INSTALL_ROOT='$ROOT'" "$ROOT/service/shell-wol.procd" || fail '持久服务不属于本安装'
+    fi
+}
+detach_firewall() {
+    [ "$BOOT_MODE" = firewall ] || return 0
+    verify_firewall
+    # Keep the persistent marker on failure; do not re-enable a partial removal.
+    touch "$ROOT/.autostart-disabled"; chmod 600 "$ROOT/.autostart-disabled"
+    if uci -q get firewall.ShellWoL >/dev/null; then
+        if ! { uci delete firewall.ShellWoL &&
+            pending=$(uci -q changes firewall) &&
+            ! printf '%s\n' "$pending" | grep -Ev '^$|^[+-]?firewall\.ShellWoL([.=]|$)' >/dev/null &&
+            uci commit firewall; }; then
+            uci -q revert firewall.ShellWoL || :
+            fail '移除 firewall 自启动入口失败；程序与数据保留，自启动标记已禁用'
+        fi
+    fi
+    # Snapshot firmware may already have discarded /etc/init.d. Restore the
+    # verified persistent copy so rc.common still queries the correct service name.
+    if [ ! -e "$SERVICE_FILE" ]; then
+        source_file=$ROOT/service/shell-wol.procd
+        [ -f "$source_file" ] && [ "$(checksum "$source_file")" = "$(state_value service_sha256)" ] || fail '服务文件缺失，且持久服务无法通过校验；程序与数据保留'
+        mkdir -p "$(dirname "$SERVICE_FILE")"
+        restored=$(mktemp "$SERVICE_FILE.new.XXXXXX")
+        if cp "$source_file" "$restored" && chmod 755 "$restored" && mv -f "$restored" "$SERVICE_FILE"; then :
+        else rm -f "$restored"; fail '恢复服务文件以停止服务失败'; fi
     fi
 }
 # Return 0 active, 1 inactive, 2 status unknown. Never treat a manager error as stopped.
@@ -140,6 +218,13 @@ check_paths() {
     check_file "$STATE"
     check_file "$ROOT/bin/shell-wol"
     check_file "$ROOT/backup/shell-wol.previous"
+    if [ "$BOOT_MODE" = firewall ]; then
+        [ ! -L "$ROOT/service" ] || fail '拒绝符号链接 service 目录'
+        if [ -e "$ROOT/service" ]; then [ -d "$ROOT/service" ] || fail 'service 不是目录'; fi
+        check_file "$ROOT/boot.sh"
+        check_file "$ROOT/service/shell-wol.procd"
+        check_file "$ROOT/.autostart-disabled"
+    fi
     if [ "$PURGE" = 1 ]; then
         for name in config.yaml devices.yaml events.yaml credentials.yaml credentials.key service.log service.err.log; do check_file "$DATA/$name"; done
     fi
@@ -156,6 +241,7 @@ cleanup() {
     code=$?
     trap - 0 HUP INT TERM
     if [ -n "$STATE_TMP" ]; then rm -f "$STATE_TMP"; fi
+    if [ "$OWN_BOOT_LOCK" = 1 ]; then rmdir "$BOOT_LOCK" 2>/dev/null || :; fi
     if [ "$OWN_DATA_LOCK" = 1 ]; then rmdir "$DATA/.lock" 2>/dev/null || :; fi
     if [ "$DATA_CREATED" = 1 ]; then rmdir "$DATA" 2>/dev/null || :; fi
     if [ -n "$INSTALL_LOCK" ]; then rmdir "$INSTALL_LOCK" 2>/dev/null || :; fi
@@ -190,7 +276,9 @@ main() {
     if [ ! -e "$ROOT" ] && [ ! -L "$ROOT" ]; then say "目录不存在，无需卸载：$ROOT"; return; fi
     check_paths
     [ -f "$STATE" ] || fail '缺少安装器元数据，拒绝处理未知目录；手动安装需人工迁移'
-    [ "$(state_value schema)" = 1 ] || fail '不支持的安装元数据版本'
+    schema=$(state_value schema)
+    BOOT_MODE=$(state_value boot_mode); BOOT_MODE=${BOOT_MODE:-native}
+    case "$schema:$BOOT_MODE" in 1:native|2:firewall) ;; *) fail '不支持的安装元数据版本或启动模式' ;; esac
     for field in version last_version; do
         value=$(state_value "$field")
         if [ "$field" = last_version ] && [ -z "$value" ]; then continue; fi
@@ -200,17 +288,21 @@ main() {
     done
     SERVICE=$(state_value service)
     case "$SERVICE" in none|systemd|procd|launchd-user|launchd-system) ;; *) fail '安装元数据中的服务类型无效' ;; esac
+    if [ "$BOOT_MODE" = firewall ]; then [ "$SERVICE" = procd ] || fail '持久启动元数据的服务类型无效'; fi
+    check_paths
     resolve_service
     if [ "$DRY_RUN" = 0 ]; then
         [ "$USER_MODE" = 1 ] || [ "$(id -u)" = 0 ] || fail '系统安装卸载需要 root；用户安装请用 --user'
         require_service_permissions
         [ -w "$ROOT" ] || fail '安装目录不可写'
     fi
-    has sha256sum || has shasum || fail '检查安装元数据需要 sha256sum 或 shasum'
+    require_sha256 || fail '无法执行 SHA256 校验，卸载已停止'
     verify_service
+    verify_firewall
     planned_state=$(checksum "$STATE") || fail '读取安装元数据失败'
     say "安装目录：$ROOT"
     say "服务类型：$SERVICE${SERVICE_FILE:+；服务文件：$SERVICE_FILE}"
+    if [ "$BOOT_MODE" = firewall ]; then say "移除自启动：firewall.ShellWoL、$ROOT/boot.sh、$ROOT/service/shell-wol.procd"; fi
     say "删除程序：$ROOT/bin/shell-wol"
     say "删除旧程序：$ROOT/backup/shell-wol.previous"
     if [ "$PURGE" = 1 ]; then
@@ -228,6 +320,12 @@ main() {
     check_paths
     [ "$(checksum "$STATE")" = "$planned_state" ] || fail '安装状态已变化，请重新预览'
     verify_service
+    if [ "$BOOT_MODE" = firewall ]; then
+        mkdir "$BOOT_LOCK" 2>/dev/null || fail '持久启动操作正在进行；遗留启动锁需人工确认或重启清理'
+        OWN_BOOT_LOCK=1
+        detach_firewall
+        verify_service
+    fi
     if service_status; then active=1; else status=$?; [ "$status" = 1 ] || fail '无法确认服务状态，停止卸载'; active=0; fi
     if [ "$active" = 1 ]; then
         [ -f "$SERVICE_FILE" ] || fail '服务仍在运行但服务文件缺失，请先人工处理'
@@ -266,6 +364,10 @@ main() {
     STATE_TMP=$(mktemp "$ROOT/.uninstall-state.XXXXXX")
     printf 'schema=1\nversion=uninstalled\nservice=none\nservice_sha256=\nstatus=uninstalled\nlast_version=%s\n' "$previous" >"$STATE_TMP"
     chmod 600 "$STATE_TMP"; mv -f "$STATE_TMP" "$STATE"; STATE_TMP=
+    if [ "$BOOT_MODE" = firewall ]; then
+        rm -f "$ROOT/boot.sh" "$ROOT/service/shell-wol.procd" "$ROOT/.autostart-disabled"
+        rmdir "$ROOT/service" 2>/dev/null || :
+    fi
     rm -f "$ROOT/bin/shell-wol" "$ROOT/backup/shell-wol.previous"
     if [ "$PURGE" = 1 ]; then
         for name in config.yaml devices.yaml events.yaml credentials.yaml credentials.key service.log service.err.log; do rm -f "$DATA/$name"; done
