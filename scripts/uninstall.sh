@@ -287,10 +287,12 @@ finish_uninstall() {
         mv -f "$STATE_TMP" "$MENU_PROFILE"; STATE_TMP=
     fi
     # Record the detached service before deleting programs, making retries safe.
+    recorded_mode=$(state_value install_mode)
     previous=$(state_value last_version)
     if [ -z "$previous" ]; then previous=$(state_value version); fi
     STATE_TMP=$(mktemp "$ROOT/.uninstall-state.XXXXXX")
     printf 'schema=1\nversion=uninstalled\nservice=none\nservice_sha256=\nstatus=uninstalled\nlast_version=%s\n' "$previous" >"$STATE_TMP"
+    if [ -n "$recorded_mode" ]; then printf 'install_mode=%s\n' "$recorded_mode" >>"$STATE_TMP"; fi
     printf 'menu_profile=%s\nmenu_sha256=%s\n' "$MENU_PROFILE" "$MENU_SHA" >>"$STATE_TMP"
     chmod 600 "$STATE_TMP"; mv -f "$STATE_TMP" "$STATE"; STATE_TMP=
     if [ "$BOOT_MODE" = firewall ]; then
@@ -354,6 +356,13 @@ main() {
             [ "$(printf '%s' "$value" | LC_ALL=C tr -cd 'A-Za-z0-9.-')" = "$value" ] && printf '%s\n' "$value" | LC_ALL=C grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9]+([.-][A-Za-z0-9]+)*)?$' || fail '安装元数据中的版本无效'
         fi
     done
+    recorded_mode=$(state_value install_mode)
+    case "$recorded_mode" in
+        user) USER_MODE=1 ;;
+        system) [ "$USER_MODE" = 0 ] || fail '已有安装为系统模式，不能使用 --user 卸载' ;;
+        '') ;; # Legacy records retain their previous explicit --user behavior.
+        *) fail '安装记录中的 install_mode 无效' ;;
+    esac
     SERVICE=$(state_value service)
     MENU_PROFILE=$(state_value menu_profile); MENU_SHA=$(state_value menu_sha256)
     case "$SERVICE" in none|systemd|procd|launchd-user|launchd-system) ;; *) fail '安装元数据中的服务类型无效' ;; esac

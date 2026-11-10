@@ -67,6 +67,18 @@ class UninstallTests(unittest.TestCase):
         fields=dict(line.split('=',1) for line in state.read_text().splitlines())
         fields.update(service=service,service_sha256=digest)
         state.write_text(''.join(k+'='+v+'\n' for k,v in fields.items()))
+    def test_user_mode_survives_offline_uninstall_and_reinstall(self):
+        self.install()
+        env=dict(self.env,SHELL_WOL_UNINSTALL_LIBRARY='0')
+        r=subprocess.run(['sh',str(UNINSTALLER),'--install-dir',str(self.root),'--yes'],
+                         env=env,text=True,capture_output=True)
+        self.assertEqual(r.returncode,0,r.stdout+r.stderr)
+        self.assertIn('install_mode=user',(self.root/'.shell-wol-install').read_text())
+        r=subprocess.run(['sh','-c','. "$1";shift;main "$@"','install',str(install_fixture.INSTALLER),
+            '--install-dir',str(self.root),'--yes'],env=self.fixture.env,text=True,capture_output=True)
+        self.assertEqual(r.returncode,0,r.stdout+r.stderr)
+        self.assertIn('install_mode=user',(self.root/'.shell-wol-install').read_text())
+
     def test_default_keeps_data_and_reinstall(self):
         self.install(service=True)
         data=self.root/'data';(data/'devices.yaml').write_text('devices: []\n# preserve\n')

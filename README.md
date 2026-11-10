@@ -33,7 +33,7 @@ GitHub 源：
 ```sh
 export url='https://raw.githubusercontent.com/lemoeo/Shell-WoL/main' \
   && install_script="$(curl -fsSL "$url/scripts/install.sh")" \
-  && sh -c "$install_script" -- --source github \
+  && sh -c "$install_script" install.sh --source github \
   && . /etc/profile >/dev/null 2>&1
 ```
 
@@ -42,7 +42,7 @@ jsDelivr CDN 源（使用 ShellCrash 中的 `testingcf.jsdelivr.net`）：
 ```sh
 export url='https://testingcf.jsdelivr.net/gh/lemoeo/Shell-WoL@main' \
   && install_script="$(curl -fsSL "$url/scripts/install.sh")" \
-  && sh -c "$install_script" -- --source jsdelivr --cdn-base https://testingcf.jsdelivr.net \
+  && sh -c "$install_script" install.sh --source jsdelivr --cdn-base https://testingcf.jsdelivr.net \
   && . /etc/profile >/dev/null 2>&1
 ```
 
@@ -51,7 +51,7 @@ macOS 默认 zsh 用户安装：
 ```sh
 export url='https://raw.githubusercontent.com/lemoeo/Shell-WoL/main' \
   && install_script="$(curl -fsSL "$url/scripts/install.sh")" \
-  && sh -c "$install_script" -- --source github --user \
+  && sh -c "$install_script" install.sh --source github --user \
   && . "$HOME/.zshrc" >/dev/null 2>&1
 ```
 
@@ -61,7 +61,7 @@ export url='https://raw.githubusercontent.com/lemoeo/Shell-WoL/main' \
 
 安装器默认 CDN 为 `https://cdn.jsdelivr.net`；上面的 CDN 命令显式使用 `testingcf.jsdelivr.net`。切换 CDN 时，同时修改入口 `url` 的域名和 `--cdn-base`；也可用环境变量 `SHELL_WOL_CDN_BASE` 设置安装器默认 CDN。CDN 二进制需要先由发布流程同步 `assets-版本` 标签，已有 Release 可通过 **Sync CDN assets** 工作流补齐，见 [安装源和 CDN](docs/install.md#安装源和-cdn)。
 
-小米镜像固件（检测到 `/data/etc/crontabs/root` 且 `/data` 可写）注册后台服务时，默认使用持久化 `firewall.ShellWoL` include：启动 `/data/shell-wol/boot.sh`，恢复可能被重置的 `/etc/init.d/shell-wol`，交由 procd 管理。普通 OpenWrt 继续使用原生 procd 自启动；可通过 `--boot-mode native|firewall` 显式选择。该机制不增加端口放行规则，要求固件持久保存 firewall UCI 配置，实际重启仍需目标设备验证。禁用、恢复和排查见 [镜像固件自启动](docs/openwrt.md#镜像固件的持久自启动)。
+小米镜像固件（检测到 `/data/etc/crontabs/root` 且 `/data` 可写）注册后台服务时，默认使用持久化 `firewall.ShellWoL` include：启动 `/data/shell-wol/boot.sh`（由独立的 [scripts/boot.sh](scripts/boot.sh) 下载校验并填入安装路径），恢复可能被重置的 `/etc/init.d/shell-wol`，交由 procd 管理。普通 OpenWrt 继续使用原生 procd 自启动；可通过 `--boot-mode native|firewall` 显式选择。该机制不增加端口放行规则，要求固件持久保存 firewall UCI 配置，实际重启仍需目标设备验证。禁用、恢复和排查见 [镜像固件自启动](docs/openwrt.md#镜像固件的持久自启动)。
 
 ## 卸载
 
@@ -198,7 +198,7 @@ sh scripts/template-checksums.sh --check
 
 前端请求测试使用 Node.js 18+ 的内置测试运行器，仅用于开发验证，不影响目标设备的单文件部署。
 
-构建默认 `CGO_ENABLED=0`，`dist/` 仅输出二进制、VERSION 和二进制 SHA256SUMS。安装器位于仓库 `scripts/install.sh`；服务模板与 `deploy/SHA256SUMS` 从所选二进制版本对应的仓库标签下载，不混用 `main` 模板。推送合法版本标签可触发 [Release 工作流](.github/workflows/release.yml)，发布步骤见 [安装指南](docs/install.md)。构建目标：
+构建默认 `CGO_ENABLED=0`，`dist/` 仅输出二进制、VERSION 和二进制 SHA256SUMS。安装器位于仓库 `scripts/install.sh`；服务模板、菜单、启动脚本与 `deploy/SHA256SUMS` 统一从仓库 main 下载，独立于二进制版本更新。推送合法版本标签可触发 [Release 工作流](.github/workflows/release.yml)，发布步骤见 [安装指南](docs/install.md)。构建目标：
 
 | 系统 | 架构 |
 | --- | --- |

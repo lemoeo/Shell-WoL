@@ -117,9 +117,11 @@ class BootTests(unittest.TestCase):
     def make_release(self, version):
         self.f.make_release(version)
         (self.f.template_dir/'shell-wol.openwrt').write_text(PROCD)
-        (self.f.template_dir/'SHA256SUMS').write_text(''.join(
-            hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n'
-            for p in sorted(self.f.template_dir.iterdir()) if p.name != 'SHA256SUMS'))
+        boot=self.f.template_dir.parent/'scripts/boot.sh'
+        boot.write_text(boot.read_text().replace('SERVICE_FILE=/etc/init.d/shell-wol',
+            'SERVICE_FILE="$FIXTURE_SERVICE/shell-wol"').replace(
+            'BOOT_LOCK=/tmp/shell-wol-boot.lock','BOOT_LOCK="$FIXTURE_SERVICE/boot.lock"'))
+        self.f.template_manifest()
 
     def install(self, *args, mode='firewall', success=True):
         prefix = '. "$1"; UNINSTALL_SOURCE=$1; shift; BOOT_LOCK="$FIXTURE_SERVICE/boot.lock"; '
@@ -158,6 +160,43 @@ class BootTests(unittest.TestCase):
         self.unit.unlink()
         (self.service/'active').unlink(missing_ok=True)
         (self.service/'enabled').unlink(missing_ok=True)
+
+    def test_boot_download_uses_main_and_is_verified_before_stop(self):
+        self.install()
+        before={n:(self.root/n).read_bytes() for n in ('boot.sh','.shell-wol-install','bin/shell-wol')}
+        starts=self.starts()
+        self.make_release('v1.2.4')
+        self.env['CORRUPT_CDN_SUFFIX']='/scripts/boot.sh'
+        self.install('--source','jsdelivr',success=False)
+        for n,data in before.items():self.assertEqual((self.root/n).read_bytes(),data)
+        self.assertTrue((self.service/'active').exists());self.assertEqual(self.starts(),starts)
+        requests=(self.f.base/'downloads').read_text().splitlines()
+        self.assertIn('https://cdn.jsdelivr.net/gh/lemoeo/Shell-WoL@main/scripts/boot.sh',requests)
+        del self.env['CORRUPT_CDN_SUFFIX']
+        self.install('--source','jsdelivr')
+        self.assertNotIn('@ROOT@',(self.root/'boot.sh').read_text())
+
+    def test_missing_main_boot_fails_before_modifying_installation(self):
+        self.install()
+        before=(self.root/'.shell-wol-install').read_bytes()
+        self.make_release('v1.2.4')
+        (self.f.template_dir.parent/'scripts/boot.sh').unlink()
+        result=self.install(success=False)
+        self.assertIn('无法下载 main 的 boot.sh',result.stderr)
+        self.assertEqual((self.root/'.shell-wol-install').read_bytes(),before)
+        self.assertTrue((self.service/'active').exists())
+
+    def test_native_procd_upgrade_preserves_all_service_states(self):
+        self.install(mode='native')
+        for running,enabled in ((False,False),(False,True),(True,False),(True,True)):
+            with self.subTest(running=running,enabled=enabled):
+                for name,present in (('active',running),('enabled',enabled)):
+                    p=self.service/name
+                    if present:p.touch()
+                    else:p.unlink(missing_ok=True)
+                self.install(mode='native')
+                self.assertEqual((self.service/'active').exists(),running)
+                self.assertEqual((self.service/'enabled').exists(),enabled)
 
     def test_registration_and_reset_recovery(self):
         self.install()
@@ -338,9 +377,7 @@ p.write_text(str(n));print(n)
         p=self.f.template_dir/'shell-wol.openwrt'
         p.write_text(p.read_text().replace('running) [ "${STATUS_ERROR:-0}" != 1 ] || exit 2; [ -f "$folder/active" ];;',
                                           'running) exit 0;;'))
-        manifest=self.f.template_dir/'SHA256SUMS'
-        manifest.write_text(''.join(hashlib.sha256(x.read_bytes()).hexdigest()+'  '+x.name+'\n'
-            for x in sorted(self.f.template_dir.iterdir()) if x.name!='SHA256SUMS'))
+        self.f.template_manifest()
         self.install();self.reset_etc()
         count=self.starts()
         self.boot()

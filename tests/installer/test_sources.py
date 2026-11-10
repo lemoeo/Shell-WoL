@@ -1,4 +1,4 @@
-"""Transport selection must preserve exact versions and integrity checks."""
+"""Binary versions stay fixed; deployment files follow main with integrity checks."""
 import json
 import unittest
 
@@ -15,7 +15,7 @@ class SourceTests(unittest.TestCase):
     def test_explicit_github_never_contacts_cdn(self):
         self.f.run_install('--source', 'github', '--service', service=True)
         self.assertTrue(all('jsdelivr.net' not in u for u in self.requests()))
-        self.assertTrue(any('/'+fixture.MENU_REF+'/scripts/menu.sh' in u for u in self.requests()))
+        self.assertTrue(any('/main/scripts/menu.sh' in u for u in self.requests()))
 
     def test_omitted_source_defaults_to_github(self):
         # An old terminal setting must not silently change the default source.
@@ -23,33 +23,32 @@ class SourceTests(unittest.TestCase):
         self.f.run_install('--service', service=True)
         self.assertTrue(all('jsdelivr.net' not in u for u in self.requests()))
 
-    def test_jsdelivr_uses_asset_and_source_tags(self):
+    def test_jsdelivr_uses_binary_asset_tags_and_main_deployment_files(self):
         self.f.run_install('--source', 'jsdelivr', '--service', service=True)
         requests = self.requests()
         self.assertTrue(all(u.startswith('https://cdn.jsdelivr.net/gh/') for u in requests))
         self.assertTrue(any('@assets/VERSION' in u for u in requests))
         self.assertTrue(any('@assets-v1.2.3/shell-wol-linux-amd64' in u for u in requests))
-        self.assertTrue(any('@v1.2.3/deploy/shell-wol.service' in u for u in requests))
-        self.assertTrue(any('@'+fixture.MENU_REF+'/scripts/menu.sh' in u for u in requests))
-        self.assertFalse(any('/releases/' in u or '@main/' in u or '@latest' in u for u in requests))
+        self.assertTrue(any('@main/deploy/shell-wol.service' in u for u in requests))
+        self.assertTrue(any('@main/scripts/menu.sh' in u for u in requests))
+        self.assertFalse(any('/releases/' in u or '@v1.2.3/' in u or '@latest' in u for u in requests))
 
-    def test_old_branch_manifest_without_menu_does_not_affect_install(self):
-        # Reproduce the real CDN response: main still has the old three lines.
-        old=self.f.base/'repository/main/deploy/SHA256SUMS'
-        old.parent.mkdir(parents=True)
-        old.write_text(''.join(line+'\n' for line in
-            (fixture.REPO/'deploy/SHA256SUMS').read_text().splitlines()
-            if line.split()[-1]!='menu.sh'))
+    def test_main_manifest_without_menu_stops_upgrade_before_changes(self):
         self.f.run_install('--source','jsdelivr')
-        requests=self.requests()
-        self.assertFalse(any('@main/' in u for u in requests))
-        self.assertTrue(any('@'+fixture.MENU_REF+'/deploy/SHA256SUMS' in u for u in requests))
-        self.assertTrue((self.f.root/'menu.sh').exists())
-
-    def test_missing_fixed_menu_manifest_does_not_fall_back_to_branch(self):
-        (self.f.menu_dir.parent/'deploy/SHA256SUMS').unlink()
+        before=(self.f.root/'bin/shell-wol').read_bytes()
+        manifest=self.f.template_dir/'SHA256SUMS'
+        manifest.write_text(''.join(line+'\n' for line in manifest.read_text().splitlines()
+                                   if line.split()[-1]!='menu.sh'))
         self.f.run_install('--source','jsdelivr',success=False)
-        self.assertFalse(any('@main/' in u for u in self.requests()))
+        self.assertEqual((self.f.root/'bin/shell-wol').read_bytes(),before)
+        self.assertTrue((self.f.root/'menu.sh').exists())
+        self.assertTrue(any('@main/deploy/SHA256SUMS' in u for u in self.requests()))
+
+    def test_missing_main_manifest_stops_without_other_source_fallback(self):
+        (self.f.template_dir/'SHA256SUMS').unlink()
+        self.f.run_install('--source','jsdelivr',success=False)
+        self.assertTrue(any('@main/deploy/SHA256SUMS' in u for u in self.requests()))
+        self.assertTrue(all('cdn.jsdelivr.net' in u for u in self.requests()))
         self.assertFalse(self.f.root.exists())
 
     def test_testingcf_environment_default_with_cli_override(self):
@@ -84,10 +83,16 @@ class SourceTests(unittest.TestCase):
         self.assertFalse(any('jsdelivr.net' in u for u in requests))
         self.assertFalse(self.f.root.exists())
 
-    def test_stale_cdn_version_still_installs_consistent_snapshot(self):
+    def test_stale_cdn_binary_version_still_uses_latest_main_files(self):
         self.f.make_release('v1.2.4'); self.f.env['CDN_VERSION'] = 'v1.2.3'
+        template=self.f.template_dir/'shell-wol.service'
+        template.write_text(template.read_text()+'# latest template\n')
+        menu=self.f.menu_dir/'menu.sh';menu.write_text(menu.read_text()+'# latest menu\n')
+        self.f.template_manifest()
         self.f.run_install('--source', 'jsdelivr', '--service', service=True)
         self.assertIn('v1.2.3', (self.f.root/'bin/shell-wol').read_text())
+        self.assertIn('# latest template',(self.f.service/'shell-wol.service').read_text())
+        self.assertIn('# latest menu',(self.f.root/'menu.sh').read_text())
         self.assertFalse(any('@v1.2.4/' in u or '@assets-v1.2.4/' in u for u in self.requests()))
 
     def test_fixed_version_bypasses_latest_pointer(self):

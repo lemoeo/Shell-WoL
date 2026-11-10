@@ -47,11 +47,7 @@ class ChecksumTests(unittest.TestCase):
         self.input = self.f.base/'File With Spaces'
         self.input.write_bytes(b'\x00\xffShell-WoL checksum\n')
         self.expected = hashlib.sha256(self.input.read_bytes()).hexdigest()
-        command = '. "$1"; TMP="$2"; ROOT="$3"; SERVICE_FILE="$4"; render_boot'
-        subprocess.run(['sh', '-c', command, 'render', str(fixture.INSTALLER),
-                        str(self.f.base), str(self.f.root), str(self.f.service/'shell-wol')],
-                       env=self.env, check=True)
-        boot = (self.f.base/'rendered-boot').read_text()
+        boot = (fixture.REPO/'scripts/boot.sh').read_text()
         start = boot.index('# BEGIN SHA256 compatibility')
         end = boot.index('# END SHA256 compatibility')+len('# END SHA256 compatibility')
         self.boot_functions = self.f.base/'boot-checksum-functions.sh'

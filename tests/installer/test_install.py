@@ -11,7 +11,6 @@ import unittest
 
 REPO = Path(__file__).resolve().parents[2]
 INSTALLER = REPO / 'scripts/install.sh'
-MENU_REF = '4c991dfc7a64bf78604bb570cf803d6621465950'
 
 BINARY = r'''#!/bin/sh
 version=VERSION_VALUE
@@ -118,20 +117,20 @@ class InstallerTests(unittest.TestCase):
         self.assets.symlink_to(release,target_is_directory=True)
         (self.assets/'VERSION').write_text(version+'\n')
         p=self.assets/'shell-wol-linux-amd64';p.write_text(BINARY.replace('VERSION_VALUE',version));p.chmod(0o755)
-        self.template_dir=self.base/'repository'/version/'deploy';self.template_dir.mkdir(parents=True,exist_ok=True)
+        self.template_dir=self.base/'repository/main/deploy';self.template_dir.mkdir(parents=True,exist_ok=True)
         for name in ('shell-wol.service','shell-wol.openwrt','shell-wol.plist'):
             shutil.copyfile(REPO/'deploy'/name,self.template_dir/name)
-        (self.template_dir/'SHA256SUMS').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in sorted(self.template_dir.iterdir()) if p.name!='SHA256SUMS'))
-        self.menu_dir=self.base/'repository'/MENU_REF/'scripts';self.menu_dir.mkdir(parents=True,exist_ok=True)
-        shutil.copyfile(REPO/'scripts/menu.sh',self.menu_dir/'menu.sh')
-        manifest=self.menu_dir.parent/'deploy/SHA256SUMS';manifest.parent.mkdir(parents=True,exist_ok=True)
-        manifest.write_text(hashlib.sha256((self.menu_dir/'menu.sh').read_bytes()).hexdigest()+'  menu.sh\n')
-        # New Go releases carry the matching menu under the same source tag.
-        tagged=self.base/'repository'/version/'scripts';tagged.mkdir(parents=True,exist_ok=True)
-        shutil.copyfile(REPO/'scripts/menu.sh',tagged/'menu.sh')
-        with (self.template_dir/'SHA256SUMS').open('a') as f:
-            f.write(hashlib.sha256((tagged/'menu.sh').read_bytes()).hexdigest()+'  menu.sh\n')
+        self.menu_dir=self.base/'repository/main/scripts';self.menu_dir.mkdir(parents=True,exist_ok=True)
+        for name in ('menu.sh','boot.sh'):
+            shutil.copyfile(REPO/'scripts'/name,self.menu_dir/name)
+        self.template_manifest()
         self.manifest()
+    def template_manifest(self):
+        scripts=self.template_dir.parent/'scripts'
+        files=[p for p in sorted(self.template_dir.iterdir()) if p.name!='SHA256SUMS']
+        files += [scripts/'menu.sh',scripts/'boot.sh']
+        (self.template_dir/'SHA256SUMS').write_text(''.join(
+            hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in files))
     def manifest(self):
         (self.assets/'SHA256SUMS').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in sorted(self.assets.glob('shell-wol-*'))))
     def run_install(self,*args,service=False,success=True):
@@ -152,6 +151,36 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual((self.root/'data/config.yaml').read_bytes(),before)
         self.assertIn('v1.2.3',(self.root/'backup/shell-wol.previous').read_text())
         self.run_install();self.assertFalse((self.root/'.install-lock').exists())
+    def test_native_upgrade_preserves_running_and_enabled_states(self):
+        self.run_install('--service',service=True)
+        for running,enabled in ((False,False),(False,True),(True,False),(True,True)):
+            with self.subTest(running=running,enabled=enabled):
+                for name,present in (('active',running),('enabled',enabled)):
+                    p=self.service/name
+                    if present:p.touch()
+                    else:p.unlink(missing_ok=True)
+                self.run_install(service=True)
+                self.assertEqual((self.service/'active').exists(),running)
+                self.assertEqual((self.service/'enabled').exists(),enabled)
+        self.assertFalse(any('/scripts/boot.sh' in line for line in (self.base/'downloads').read_text().splitlines()))
+
+    def test_user_mode_is_recorded_and_reused_without_user_flag(self):
+        self.run_install()
+        state=self.root/'.shell-wol-install'
+        self.assertIn('install_mode=user',state.read_text())
+        command='. "$1"; shift; main "$@"'
+        result=subprocess.run(['sh','-c',command,'installer',str(INSTALLER),'--arch','amd64',
+            '--install-dir',str(self.root),'--yes'],env=self.env,text=True,capture_output=True)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn('install_mode=user',state.read_text())
+
+    def test_legacy_record_acquires_mode_on_upgrade(self):
+        self.run_install()
+        state=self.root/'.shell-wol-install'
+        state.write_text(state.read_text().replace('install_mode=user\n',''))
+        self.run_install()
+        self.assertIn('install_mode=user',state.read_text())
+
     def test_corrupt_download_cannot_replace_binary(self):
         self.run_install();before=(self.root/'bin/shell-wol').read_bytes()
         (self.assets/'shell-wol-linux-amd64').write_text('corrupt')
@@ -244,15 +273,15 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("INSTALL_ROOT='/data/Install With Spaces'",text)
         self.assertNotIn('@ROOT@',text)
         subprocess.run(['sh','-n',str(self.template_dir/'rendered-service')],check=True)
-    def test_template_downloads_pinned_to_binary_tag(self):
+    def test_main_deployment_files_are_independent_of_binary_version(self):
         self.make_release('v1.2.4')
         self.run_install('--service','--version','v1.2.3',service=True)
         requests=(self.base/'downloads').read_text()
         self.assertIn('/download/v1.2.3/shell-wol-linux-amd64',requests)
-        self.assertIn('/Shell-WoL/v1.2.3/deploy/SHA256SUMS',requests)
-        self.assertIn('/Shell-WoL/v1.2.3/deploy/shell-wol.service',requests)
-        self.assertNotIn('/main/deploy/shell-wol.',requests)
-        self.assertIn('/'+MENU_REF+'/scripts/menu.sh',requests)
+        self.assertIn('/Shell-WoL/main/deploy/SHA256SUMS',requests)
+        self.assertIn('/Shell-WoL/main/deploy/shell-wol.service',requests)
+        self.assertIn('/main/scripts/menu.sh',requests)
+        self.assertNotIn('/v1.2.3/deploy/',requests)
         self.assertNotIn('/v1.2.4/',requests)
     def test_template_corruption_preserves_existing_install(self):
         self.run_install('--service',service=True)
@@ -263,13 +292,13 @@ class InstallerTests(unittest.TestCase):
         self.run_install(service=True,success=False)
         self.assertEqual((self.root/'bin/shell-wol').read_bytes(),binary)
         self.assertEqual((self.service/'shell-wol.service').read_bytes(),unit)
-    def test_missing_tag_manifest_has_no_main_fallback(self):
+    def test_missing_main_manifest_stops_before_changes(self):
         (self.template_dir/'SHA256SUMS').unlink()
         result=self.run_install('--service',service=True,success=False)
-        self.assertIn('不会回退到 main',result.stderr)
+        self.assertIn('无法下载 main 部署文件校验清单',result.stderr)
         self.assertFalse(self.root.exists())
-        self.assertNotIn('/main/',(self.base/'downloads').read_text())
-    def test_missing_tag_template_has_no_release_fallback(self):
+        self.assertIn('/main/deploy/SHA256SUMS',(self.base/'downloads').read_text())
+    def test_missing_main_template_has_no_release_fallback(self):
         (self.template_dir/'shell-wol.service').unlink()
         self.run_install('--service',service=True,success=False)
         self.assertNotIn('/download/v1.2.3/shell-wol.service',(self.base/'downloads').read_text())
@@ -280,14 +309,15 @@ class InstallerTests(unittest.TestCase):
                          '--repo-base',self.env['FIXTURE_REPO_BASE']+'/',service=True)
         requests=(self.base/'downloads').read_text()
         self.assertIn('https://release.example/releases/download/v1.2.3/',requests)
-        self.assertIn('https://repo.example/raw/lemoeo/Shell-WoL/v1.2.3/deploy/',requests)
+        self.assertIn('https://repo.example/raw/lemoeo/Shell-WoL/main/deploy/',requests)
     def test_old_release_extra_assets_are_ignored(self):
         p=self.assets/'SHA256SUMS';p.write_text(p.read_text()+'0'*64+'  shell-wol.service\n')
         self.run_install('--service',service=True)
         self.assertNotIn('/download/v1.2.3/shell-wol.service',(self.base/'downloads').read_text())
     def test_template_checksum_helper_detects_stale_manifest(self):
         project=self.base/'project';(project/'scripts').mkdir(parents=True);(project/'deploy').mkdir()
-        shutil.copyfile(REPO/'scripts/menu.sh',project/'scripts/menu.sh')
+        for name in ('menu.sh','boot.sh'):
+            shutil.copyfile(REPO/'scripts'/name,project/'scripts'/name)
         helper=project/'scripts/template-checksums.sh';shutil.copyfile(REPO/'scripts/template-checksums.sh',helper)
         for name in ('shell-wol.service','shell-wol.openwrt','shell-wol.plist','SHA256SUMS'):
             shutil.copyfile(REPO/'deploy'/name,project/'deploy'/name)

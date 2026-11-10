@@ -38,14 +38,14 @@ free
 
 ## 2. 安装器部署（推荐）
 
-详见 [安装与升级指南](install.md)。在路由器 root 终端执行以下一组命令，注册后台服务并加载 `wol` 菜单别名。二进制和模板始终固定到同一版本。
+详见 [安装与升级指南](install.md)。在路由器 root 终端执行以下一组命令，注册后台服务并加载 `wol` 菜单别名。二进制按 Release 版本下载，服务模板和脚本使用仓库 main 的最新内容。
 
 GitHub 源：
 
 ```sh
 export url='https://raw.githubusercontent.com/lemoeo/Shell-WoL/main' \
   && install_script="$(curl -fsSL "$url/scripts/install.sh")" \
-  && sh -c "$install_script" -- --source github --service \
+  && sh -c "$install_script" install.sh --source github --service \
   && . /etc/profile >/dev/null 2>&1
 ```
 
@@ -54,7 +54,7 @@ jsDelivr CDN 源（使用 ShellCrash 中的域名）：
 ```sh
 export url='https://testingcf.jsdelivr.net/gh/lemoeo/Shell-WoL@main' \
   && install_script="$(curl -fsSL "$url/scripts/install.sh")" \
-  && sh -c "$install_script" -- --source jsdelivr --cdn-base https://testingcf.jsdelivr.net --service \
+  && sh -c "$install_script" install.sh --source jsdelivr --cdn-base https://testingcf.jsdelivr.net --service \
   && . /etc/profile >/dev/null 2>&1
 ```
 
@@ -84,7 +84,7 @@ sh install.sh --service --boot-mode firewall --install-dir /data/shell-wol --yes
 sh install.sh --service --boot-mode native --yes
 ```
 
-安装器在 `/data/shell-wol` 保留 `boot.sh` 和 `service/shell-wol.procd`，注册如下入口（路径跟随安装目录）：
+安装器从仓库 main 下载独立的 [`scripts/boot.sh`](../scripts/boot.sh)，校验后替换安装路径，在 `/data/shell-wol` 保留 `boot.sh` 和 `service/shell-wol.procd`，注册如下入口（路径跟随安装目录）：
 
 ```text
 firewall.ShellWoL=include

@@ -11,8 +11,6 @@ CDN_BASE=${SHELL_WOL_CDN_BASE:-https://cdn.jsdelivr.net}
 CUSTOM_DOWNLOAD=0
 CUSTOM_REPO=0
 VERSION=latest
-# Pin both files to one existing commit; CDN branch caches can update separately.
-MENU_REF=4c991dfc7a64bf78604bb570cf803d6621465950
 MENU_CHANGED=0
 PROFILE_CHANGED=0
 OLD_MENU=0
@@ -162,24 +160,20 @@ resource_url() {
         latest:jsdelivr) printf '%s/gh/%s@assets/VERSION\n' "$CDN_BASE" "$REPO" ;;
         binary:github) printf '%s/download/%s/%s\n' "$DOWNLOAD_BASE" "$VERSION" "$3" ;;
         binary:jsdelivr) printf '%s/gh/%s@assets-%s/%s\n' "$CDN_BASE" "$REPO" "$VERSION" "$3" ;;
-        template:github) printf '%s/%s/deploy/%s\n' "$REPO_BASE" "$VERSION" "$3" ;;
-        template:jsdelivr) printf '%s/gh/%s@%s/deploy/%s\n' "$CDN_BASE" "$REPO" "$VERSION" "$3" ;;
-        menu:github)
-            if [ "$3" = SHA256SUMS ]; then printf '%s/%s/deploy/SHA256SUMS\n' "$REPO_BASE" "$MENU_REF"
-            else printf '%s/%s/scripts/menu.sh\n' "$REPO_BASE" "$MENU_REF"; fi ;;
-        menu:jsdelivr)
-            if [ "$3" = SHA256SUMS ]; then printf '%s/gh/%s@%s/deploy/SHA256SUMS\n' "$CDN_BASE" "$REPO" "$MENU_REF"
-            else printf '%s/gh/%s@%s/scripts/menu.sh\n' "$CDN_BASE" "$REPO" "$MENU_REF"; fi ;;
+        script:github) printf '%s/main/scripts/%s\n' "$REPO_BASE" "$3" ;;
+        script:jsdelivr) printf '%s/gh/%s@main/scripts/%s\n' "$CDN_BASE" "$REPO" "$3" ;;
+        template:github) printf '%s/main/deploy/%s\n' "$REPO_BASE" "$3" ;;
+        template:jsdelivr) printf '%s/gh/%s@main/deploy/%s\n' "$CDN_BASE" "$REPO" "$3" ;;
         *) return 1 ;;
     esac
 }
 fetch_resource() {
     resource_kind=$1; resource_name=$2; resource_out=$3
-    case "$resource_kind:$resource_name" in latest:*) resource_timeout=10 ;; template:*|menu:*|binary:SHA256SUMS) resource_timeout=20 ;; *) resource_timeout=180 ;; esac
+    case "$resource_kind:$resource_name" in latest:*) resource_timeout=10 ;; template:*|script:*|binary:SHA256SUMS) resource_timeout=20 ;; *) resource_timeout=180 ;; esac
     resource_custom=0
     case "$resource_kind" in
         latest|binary) resource_custom=$CUSTOM_DOWNLOAD ;;
-        template|menu) resource_custom=$CUSTOM_REPO ;;
+        template|script) resource_custom=$CUSTOM_REPO ;;
     esac
     resource_source=$SOURCE
     if [ "$resource_custom" = 1 ]; then resource_source=github; fi
@@ -299,172 +293,7 @@ restore_procd_file() {
     else rm -f "$restored"; fail '恢复旧 procd 服务失败'; fi
 }
 render_boot() {
-    # Keep this helper in the installer so existing binary tags need no new asset.
-    cat >"$TMP/rendered-boot" <<HEADER
-#!/bin/sh
-# Managed by Shell-WoL persistent boot v1.
-# fw3 sources includes: contain variables, functions, traps and shell options.
-(
-ROOT='$ROOT'
-SERVICE_FILE='$SERVICE_FILE'
-BOOT_LOCK='$BOOT_LOCK'
-HEADER
-    cat >>"$TMP/rendered-boot" <<'BOOT'
-set -eu
-state_value() { sed -n "s/^$1=//p" "$ROOT/.shell-wol-install"; }
-log() { logger -t shell-wol-boot "$*" 2>/dev/null || :; }
-die() { log "$*"; printf '%s\n' "$*" >&2; exit 1; }
-# BEGIN SHA256 compatibility (also embedded in the persistent boot helper).
-SHA256_TOOL=
-sha256_digest() {
-    # Read stdin so filenames never affect the digest's output format.
-    case "$SHA256_TOOL" in
-        sha256sum) digest_output=$(sha256sum <"$1") || return 1 ;;
-        busybox) digest_output=$(busybox sha256sum <"$1") || return 1 ;;
-        shasum) digest_output=$(shasum -a 256 <"$1") || return 1 ;;
-        openssl) digest_output=$(openssl dgst -sha256 <"$1") || return 1 ;;
-        *) return 1 ;;
-    esac
-    digest_value=$(printf '%s\n' "$digest_output" | LC_ALL=C awk -v tool="$SHA256_TOOL" '
-        NR == 1 {if (tool == "openssl") print $NF; else print $1; next}
-        {exit 1}
-    ') || return 1
-    digest_value=$(printf '%s' "$digest_value" | LC_ALL=C tr 'A-F' 'a-f')
-    [ "${#digest_value}" = 64 ] || return 1
-    case "$digest_value" in *[!0-9a-f]*) return 1 ;; esac
-    printf '%s\n' "$digest_value"
-}
-require_sha256() {
-    [ -z "$SHA256_TOOL" ] || return 0
-    for SHA256_TOOL in sha256sum busybox shasum openssl; do
-        if digest_probe=$(sha256_digest /dev/null 2>/dev/null) &&
-            [ "$digest_probe" = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 ]; then
-            return 0
-        fi
-    done
-    SHA256_TOOL=
-    printf '%s\n' '没有可用的 SHA256 校验工具；已尝试 sha256sum、busybox sha256sum、shasum -a 256、openssl dgst -sha256，请安装或启用其中一种。' >&2
-    return 1
-}
-checksum() {
-    require_sha256 || return 1
-    sha256_digest "$1"
-}
-# END SHA256 compatibility
-owned_state() {
-    [ -f "$ROOT/.shell-wol-install" ] && [ ! -L "$ROOT/.shell-wol-install" ] &&
-    [ "$(state_value schema)" = 2 ] && [ "$(state_value service)" = procd ] &&
-    [ "$(state_value boot_mode)" = firewall ] && [ "$(state_value boot_script)" = "$ROOT/boot.sh" ] &&
-    [ "$(state_value uci_section)" = ShellWoL ]
-}
-owned_include() {
-    [ "$(uci -q get firewall.ShellWoL 2>/dev/null)" = include ] &&
-    [ "$(uci -q get firewall.ShellWoL.type 2>/dev/null)" = script ] &&
-    [ "$(uci -q get firewall.ShellWoL.path 2>/dev/null)" = "$ROOT/boot.sh" ]
-}
-allowed() {
-    owned_state && owned_include &&
-    [ "$(uci -q get firewall.ShellWoL.enabled 2>/dev/null)" = 1 ] &&
-    [ ! -e "$ROOT/.autostart-disabled" ] && [ ! -L "$ROOT/.autostart-disabled" ] &&
-    [ ! -e "$ROOT/.install-lock" ] && [ ! -L "$ROOT/.install-lock" ]
-}
-lock() {
-    [ ! -e "$ROOT/.install-lock" ] && [ ! -L "$ROOT/.install-lock" ] || die '安装或卸载正在进行，跳过自启动'
-    mkdir "$BOOT_LOCK" 2>/dev/null || die '启动操作正在进行；遗留锁需人工确认或重启清理'
-    trap 'rmdir "$BOOT_LOCK" 2>/dev/null || :' 0
-    trap 'exit 130' INT
-    trap 'exit 143' HUP TERM
-    [ ! -e "$ROOT/.install-lock" ] && [ ! -L "$ROOT/.install-lock" ] || die '安装或卸载正在进行，跳过自启动'
-}
-check_paths() {
-    parent=$ROOT
-    while [ "$parent" != / ]; do [ ! -L "$parent" ] || die "拒绝符号链接目录：$parent"; parent=$(dirname "$parent"); done
-    for path in "$ROOT/service" "$ROOT/service/shell-wol.procd" "$ROOT/bin" "$ROOT/bin/shell-wol" "$ROOT/data" "$SERVICE_FILE"; do
-        [ ! -L "$path" ] || die "拒绝符号链接：$path"
-    done
-}
-restore_service() {
-    source_file=$ROOT/service/shell-wol.procd
-    [ -f "$source_file" ] && [ "$(checksum "$source_file")" = "$(state_value service_sha256)" ] || die '持久服务校验失败'
-    grep -Fqx "INSTALL_ROOT='$ROOT'" "$source_file" || die '持久服务不属于本安装'
-    if [ ! -e "$SERVICE_FILE" ]; then
-        mkdir -p "$(dirname "$SERVICE_FILE")"
-        # mktemp + rename prevents partial init scripts if power is lost.
-        new_file=$(mktemp "$SERVICE_FILE.new.XXXXXX") || die '无法创建服务文件'
-        if cp "$source_file" "$new_file" && chmod 755 "$new_file" && mv -f "$new_file" "$SERVICE_FILE"; then :
-        else rm -f "$new_file"; die '恢复服务失败'; fi
-    fi
-    [ -f "$SERVICE_FILE" ] && [ -x "$SERVICE_FILE" ] &&
-        grep -Fqx "INSTALL_ROOT='$ROOT'" "$SERVICE_FILE" || die '现有服务不属于本安装或不可执行'
-}
-run() {
-    allowed || return 0
-    check_paths
-    lock
-    allowed || return 0
-    require_sha256 || die '没有可用的 SHA256 校验工具，持久自启动已停止'
-    # Restore the shortcut when snapshot firmware rebuilds /etc/profile.
-    if [ "$(state_value menu_profile)" = /etc/profile ] && [ -w /etc/profile ] && [ ! -L /etc/profile ] &&
-        [ -f "$ROOT/menu.sh" ] && [ ! -L "$ROOT/menu.sh" ] &&
-        [ "$(checksum "$ROOT/menu.sh")" = "$(state_value menu_sha256)" ]; then
-        entry=$(printf "alias wol='sh \"%s/menu.sh\"' # Shell-WoL" "$ROOT")
-        if ! grep -Eq '^[[:space:]]*alias[[:space:]]+wol=' /etc/profile; then printf '%s\n' "$entry" >>/etc/profile; fi
-    fi
-    deadline=$(($(date +%s) + 60))
-    while ! { [ -x "$ROOT/bin/shell-wol" ] && [ -f "$ROOT/data/config.yaml" ] &&
-        [ -f "$ROOT/data/devices.yaml" ] && ubus -t 2 list service >/dev/null 2>&1; }; do
-        allowed || return 0
-        [ "$(date +%s)" -lt "$deadline" ] || die '等待 procd 或持久数据超时（60 秒），可恢复后重新执行 boot.sh'
-        sleep 1
-    done
-    restore_service
-    if "$SERVICE_FILE" running >/dev/null 2>&1; then
-        # Some vendor rc.common implementations return success unconditionally.
-        "$ROOT/bin/shell-wol" check --data-dir "$ROOT/data" --running >/dev/null 2>&1 && return 0
-    else code=$?; [ "$code" = 1 ] || die '无法确认 procd 服务状态'; fi
-    if "$ROOT/bin/shell-wol" lock --help >/dev/null 2>&1; then
-        "$ROOT/bin/shell-wol" lock --data-dir "$ROOT/data" >/dev/null || die '数据目录正被占用或存在旧版目录锁'
-    else
-        [ ! -e "$ROOT/data/.lock" ] && [ ! -L "$ROOT/data/.lock" ] || die '数据运行锁仍存在；不会删除锁或重复启动'
-    fi
-    "$ROOT/bin/shell-wol" check --data-dir "$ROOT/data" >/dev/null 2>&1 || die 'YAML 配置检查失败'
-    allowed || return 0
-    "$SERVICE_FILE" start || die 'procd 启动失败'
-    while ! { "$SERVICE_FILE" running >/dev/null 2>&1 && "$ROOT/bin/shell-wol" check --data-dir "$ROOT/data" --running >/dev/null 2>&1; }; do
-        [ "$(date +%s)" -lt "$deadline" ] || die '服务就绪检查超时，请检查 procd 日志及监听地址'
-        sleep 1
-    done
-    log 'Shell-WoL 已恢复并启动'
-}
-set_enabled() {
-    [ "$(id -u)" = 0 ] || die '修改自启动需要 root'
-    owned_state && owned_include || die '启动配置不属于本安装'
-    check_paths
-    lock
-    pending=$(uci -q changes firewall) || die '无法读取 firewall 待提交配置'
-    [ -z "$pending" ] || die 'firewall 存在未提交修改，请先处理'
-    [ ! -L "$ROOT/.autostart-disabled" ] || die '禁用标记不能是符号链接'
-    # Disable locally first; a failed commit must never accidentally re-enable it.
-    if [ "$1" = 0 ]; then touch "$ROOT/.autostart-disabled"; chmod 600 "$ROOT/.autostart-disabled"; fi
-    if ! { uci set "firewall.ShellWoL.enabled=$1" &&
-        pending=$(uci -q changes firewall) &&
-        ! printf '%s\n' "$pending" | grep -Ev '^$|^[+-]?firewall\.ShellWoL\.enabled=' >/dev/null &&
-        uci commit firewall; }; then
-        uci -q revert firewall.ShellWoL.enabled || :
-        die '保存自启动状态失败'
-    fi
-    if [ "$1" = 1 ]; then rm -f "$ROOT/.autostart-disabled"; fi
-}
-case "${1:-start}" in
-    start|boot|restart|reload|includes) if allowed; then "$ROOT/boot.sh" run </dev/null >/dev/null 2>&1 & fi ;;
-    run) run ;;
-    enable) set_enabled 1; printf '%s\n' '自启动已启用；未立即启动服务' ;;
-    disable) set_enabled 0; printf '%s\n' '自启动已禁用；未停止当前服务' ;;
-    status) if owned_state && owned_include && [ "$(uci -q get firewall.ShellWoL.enabled)" = 1 ] && [ ! -e "$ROOT/.autostart-disabled" ]; then echo enabled; else echo disabled; exit 1; fi ;;
-    *) die '用法：boot.sh [start|run|enable|disable|status]' ;;
-esac
-)
-BOOT
+    sed "s|@ROOT@|$ROOT|g" "$TMP/boot.sh" >"$TMP/rendered-boot"
 }
 service_active() {
     case "$SERVICE" in
@@ -515,7 +344,14 @@ service_start() {
     case "$SERVICE" in
         systemd) systemctl start shell-wol.service ;;
         procd) "$SERVICE_FILE" start ;;
-        launchd-user|launchd-system) launchctl bootstrap "$LAUNCH_DOMAIN" "$SERVICE_FILE" ;;
+        launchd-user|launchd-system)
+            # bootstrap refuses disabled jobs. Restore the flag even on failure;
+            # this also applies when restarting the old job during rollback.
+            if [ "${ENABLE_BOOT:-1}" = 0 ]; then service_enable || return 1; fi
+            bootstrap_result=0
+            launchctl bootstrap "$LAUNCH_DOMAIN" "$SERVICE_FILE" || bootstrap_result=$?
+            if [ "${ENABLE_BOOT:-1}" = 0 ]; then service_disable || return 1; fi
+            [ "$bootstrap_result" = 0 ] || return 1 ;;
     esac
     attempts=0
     while [ "$attempts" -lt 10 ]; do
@@ -567,7 +403,7 @@ rollback() {
     if [ "$OLD_STATE" = 1 ]; then cp "$TMP/old-state" "$ROOT/.shell-wol-install" || say '警告：安装状态恢复失败' >&2
     else
         # Retain ownership of a fresh, partially initialized directory for retry.
-        printf 'schema=1\nversion=uninstalled\nservice=none\nservice_sha256=\n' >"$ROOT/.shell-wol-install"
+        printf 'schema=1\nversion=uninstalled\nservice=none\nservice_sha256=\ninstall_mode=%s\n' "$INSTALL_MODE" >"$ROOT/.shell-wol-install"
         chmod 600 "$ROOT/.shell-wol-install"
     fi
     rm -f "$BIN/.shell-wol-new" "$ROOT/.shell-wol-install.new"
@@ -682,10 +518,10 @@ password_ready() {
     # Use the application's YAML parser rather than interpreting YAML in shell.
     "$BIN/shell-wol" check --data-dir "$DATA" --require-password >/dev/null 2>&1
 }
-main() {
+parse_options() {
     while [ "$#" -gt 0 ]; do
         case "$1" in
-            --help|-h) usage; return ;;
+            --help|-h) usage; exit 0 ;;
             --version|--arch|--install-dir|--download-base|--repo-base|--boot-mode|--source|--cdn-base)
                 [ "$#" -ge 2 ] || fail "$1 缺少参数"
                 case "$1" in --version) VERSION=$2 ;; --arch) ARCH=$2 ;; --install-dir) INSTALL_DIR=$2 ;; --download-base) DOWNLOAD_BASE=$2; CUSTOM_DOWNLOAD=1 ;; --repo-base) REPO_BASE=$2; CUSTOM_REPO=1 ;; --boot-mode) BOOT_MODE=$2 ;; --source) SOURCE=$2; SOURCE_SET=1 ;; --cdn-base) CDN_BASE=$2 ;; esac; shift 2 ;;
@@ -695,6 +531,23 @@ main() {
             *) fail "未知参数：$1" ;;
         esac
     done
+}
+
+resolve_install_mode() {
+    if [ -f "$INSTALL_DIR/.shell-wol-install" ] && [ ! -L "$INSTALL_DIR/.shell-wol-install" ]; then
+        recorded_mode=$(sed -n 's/^install_mode=//p' "$INSTALL_DIR/.shell-wol-install")
+        case "$recorded_mode" in
+            user) USER_MODE=1 ;;
+            system) [ "$USER_MODE" = 0 ] || fail '已有安装为系统模式，不能使用 --user 升级' ;;
+            '') ;; # Legacy records rely on the original caller's --user option.
+            *) fail '安装记录中的 install_mode 无效' ;;
+        esac
+    fi
+    INSTALL_MODE=system; [ "$USER_MODE" = 0 ] || INSTALL_MODE=user
+    [ "$USER_MODE" = 1 ] || [ "$(id -u)" = 0 ] || fail '系统安装需要 root；可使用 --user 或由管理员执行'
+}
+
+detect_environment() {
     case "$BOOT_MODE" in auto|native|firewall) ;; *) fail '--boot-mode 必须为 auto、native 或 firewall' ;; esac
     case "$SOURCE" in github|jsdelivr) ;; *) fail '--source 必须为 github 或 jsdelivr' ;; esac
     CDN_BASE=${CDN_BASE%/}
@@ -718,11 +571,14 @@ main() {
         fi
     fi
     INSTALL_DIR=${INSTALL_DIR%/}; validate_dir "$INSTALL_DIR"
-    [ "$USER_MODE" = 1 ] || [ "$(id -u)" = 0 ] || fail '系统安装需要 root；可使用 --user 或由管理员执行'
+    resolve_install_mode
     case "$INSTALL_DIR/" in /tmp/*|/var/run/*|/run/*|/sys/*|/proc/*|/dev/*) fail '安装根目录必须使用持久化存储' ;; esac
     has curl || has wget || fail '需要 curl 或 wget'
     require_sha256 || fail '无法执行 SHA256 校验，安装已停止'
     if ! has curl; then wget --help 2>&1 | grep -q -- '--https-only' || fail '需要支持 --https-only 的 wget；精简固件请先安装 curl 和 CA 证书'; fi
+}
+
+plan_install() {
     say "系统：$OS；固件类型：$FIRMWARE；CPU：$ARCH"
     say "安装根目录：$INSTALL_DIR"
     if [ "$ASSUME_YES" = 0 ]; then
@@ -745,6 +601,7 @@ main() {
     while [ "$parent" != / ]; do [ ! -L "$parent" ] || fail "路径含符号链接：$parent"; parent=$(dirname "$parent"); done
     if [ -d "$INSTALL_DIR" ] && [ -n "$(ls -A "$INSTALL_DIR")" ] && [ ! -f "$INSTALL_DIR/.shell-wol-install" ]; then fail '目标目录非空且不是安装器管理的目录；请选择新目录，旧数据请手动迁移'; fi
     ROOT=$INSTALL_DIR; BIN=$ROOT/bin; DATA=$ROOT/data
+    resolve_install_mode
     for path in "$ROOT/.shell-wol-install" "$BIN" "$DATA" "$ROOT/backup" "$BIN/shell-wol"; do [ ! -L "$path" ] || fail "安装路径不能是符号链接：$path"; done
     if [ -d "$DATA" ] && [ -n "$(find "$DATA" -type l -print)" ]; then fail '数据目录含符号链接，需先人工检查'; fi
     SERVICE=none; SERVICE_FILE=; SERVICE_USER=; SERVICE_GROUP=; LAUNCH_DOMAIN=
@@ -784,6 +641,9 @@ main() {
         verify_boot_paths
         verify_firewall
     fi
+}
+
+download_assets() {
     TMP=$(mktemp -d "${TMPDIR:-/tmp}/shell-wol-install.XXXXXX") || fail '无法创建临时目录'
     trap cleanup 0
     trap 'exit 130' INT
@@ -798,23 +658,20 @@ main() {
     chmod 755 "$TMP/$artifact"
     [ "$("$TMP/$artifact" version)" = "$VERSION" ] || fail '二进制无法运行或版本不匹配'
     NEW_SYSTEM_LOCK=0
-    if "$TMP/$artifact" lock --help >/dev/null 2>&1; then
-        NEW_SYSTEM_LOCK=1
-        # New Go features and their menu ship together in the normal release tag.
-        MENU_REF=$VERSION
-    fi
+    if "$TMP/$artifact" lock --help >/dev/null 2>&1; then NEW_SYSTEM_LOCK=1; fi
+    # Deployment files track main independently of the binary Release.
+    fetch_resource template SHA256SUMS "$TMP/deploy-SHA256SUMS" || fail '无法下载 main 部署文件校验清单'
     if [ "$SERVICE" != none ]; then
         case "$SERVICE" in systemd) template=shell-wol.service ;; procd) template=shell-wol.openwrt ;; *) template=shell-wol.plist ;; esac
-        # Templates and their manifest must come from the binary's exact tag.
-        # Never mix main's templates into an older binary release.
-        fetch_resource template SHA256SUMS "$TMP/template-SHA256SUMS" || fail "无法获取 $VERSION 标签的模板校验清单；请检查仓库地址和标签，不会回退到 main"
-        fetch_resource template "$template" "$TMP/$template" || fail "无法获取 $VERSION 标签的服务模板，不会回退到 main"
-        verify_asset "$template" "$TMP/template-SHA256SUMS"
+        fetch_resource template "$template" "$TMP/$template" || fail '无法下载 main 服务模板'
+        verify_asset "$template" "$TMP/deploy-SHA256SUMS"
     fi
-    # Menu updates are independent of the Go binary; use one immutable snapshot.
-    fetch_resource menu SHA256SUMS "$TMP/menu-SHA256SUMS" || fail '无法下载菜单校验清单'
-    fetch_resource menu menu.sh "$TMP/menu.sh" || fail '无法下载终端菜单'
-    verify_asset menu.sh "$TMP/menu-SHA256SUMS"
+    if [ "$BOOT_MODE" = firewall ]; then
+        fetch_resource script boot.sh "$TMP/boot.sh" || fail '无法下载 main 的 boot.sh'
+        verify_asset boot.sh "$TMP/deploy-SHA256SUMS"
+    fi
+    fetch_resource script menu.sh "$TMP/menu.sh" || fail '无法下载 main 终端菜单'
+    verify_asset menu.sh "$TMP/deploy-SHA256SUMS"
     existing=$ROOT
     while [ ! -d "$existing" ]; do existing=$(dirname "$existing"); done
     [ -w "$existing" ] || fail "目录不可写：$existing"
@@ -822,6 +679,9 @@ main() {
     available=$(df -Pk "$existing" | awk 'END {print $4}')
     case "$available" in ''|*[!0-9]*) fail '无法确定剩余空间' ;; esac
     [ "$available" -ge "$needed" ] || fail "空间不足：需要至少 ${needed} KiB（含升级备份余量）"
+}
+
+backup_and_stop() {
     mkdir -p "$ROOT"
     mkdir "$ROOT/.install-lock" 2>/dev/null || fail '另一个安装进程正在使用该目录'
     INSTALL_LOCK=$ROOT/.install-lock
@@ -883,6 +743,9 @@ main() {
     elif [ -e "$DATA/.lock" ] || [ -L "$DATA/.lock" ]; then
         fail '目标旧版本不支持当前文件锁格式；请先停服并使用兼容版本'
     fi
+}
+
+install_program() {
     if [ "$OLD_BINARY" = 1 ]; then cp "$TMP/old-binary" "$ROOT/backup/shell-wol.previous"; chmod 700 "$ROOT/backup/shell-wol.previous"; fi
     cp "$TMP/$artifact" "$BIN/.shell-wol-new"; chmod 755 "$BIN/.shell-wol-new"; mv -f "$BIN/.shell-wol-new" "$BIN/shell-wol"
     if [ ! -f "$DATA/config.yaml" ] && [ ! -f "$DATA/devices.yaml" ]; then
@@ -894,6 +757,9 @@ main() {
         fi
     fi
     "$BIN/shell-wol" check --data-dir "$DATA" >/dev/null || fail '安装后的配置检查失败'
+}
+
+install_service() {
     service_hash=
     if [ "$SERVICE" != none ]; then
         prepare_service_user
@@ -914,16 +780,21 @@ main() {
             "$SERVICE_FILE" disable || fail '清理原生 procd 自启动链接失败'
         fi
         if [ "$BOOT_MODE" = firewall ] || [ "$PRIOR_BOOT_MODE" = firewall ]; then register_firewall || fail '保存 firewall 自启动入口失败'; fi
-        if [ "$BOOT_MODE" != firewall ] || [ "$ENABLE_BOOT" = 1 ]; then service_enable || fail '服务启用失败'; fi
-        if [ "$prior_service" = none ] || [ "$WAS_ACTIVE" = 1 ] || { [ "$PRIOR_BOOT_MODE" != firewall ] && [ "$BOOT_MODE" != firewall ]; }; then
+        if [ "$ENABLE_BOOT" = 1 ]; then service_enable || fail '服务启用失败'
+        elif [ "$BOOT_MODE" = native ]; then service_disable || fail '恢复服务禁用状态失败'; fi
+        if [ "$prior_service" = none ] || [ "$WAS_ACTIVE" = 1 ]; then
             service_start || fail '服务启动检查失败'
             say '后台服务已启动；Web 接口就绪检查通过。'
         else say '保留旧服务的停止状态。'; fi
     fi
+}
+
+save_installation() {
     install_menu
     {
         schema=1; [ "$BOOT_MODE" != firewall ] || schema=2
         printf 'schema=%s\nversion=%s\nservice=%s\nservice_sha256=%s\nboot_mode=%s\n' "$schema" "$VERSION" "$SERVICE" "$service_hash" "$BOOT_MODE"
+        printf 'install_mode=%s\n' "$INSTALL_MODE"
         printf 'menu_profile=%s\nmenu_sha256=%s\n' "$MENU_PROFILE" "$(checksum "$ROOT/menu.sh")"
         if [ "$BOOT_MODE" = firewall ]; then printf 'boot_script=%s/boot.sh\nuci_section=ShellWoL\nboot_sha256=%s\n' "$ROOT" "$(checksum "$ROOT/boot.sh")"; fi
     } >"$ROOT/.shell-wol-install.new"
@@ -935,6 +806,9 @@ main() {
         elif [ "$ENABLE_BOOT" = 1 ]; then rm -f "$ROOT/.autostart-disabled"; fi
     fi
     COMMITTED=1
+}
+
+report_result() {
     say "安装完成：$BIN/shell-wol"
     say "数据目录：$DATA"
     say "终端菜单：wol；重新登录或执行 . \"$MENU_PROFILE\" 后生效。"
@@ -967,6 +841,18 @@ main() {
         say "卸载脚本：$CDN_BASE/gh/$REPO@main/scripts/uninstall.sh"
     else say "卸载脚本：$REPO_BASE/main/scripts/uninstall.sh"; fi
     say "预览卸载：sh uninstall.sh --install-dir \"$ROOT\" --dry-run（用户安装加 --user）"
+}
+
+main() {
+    parse_options "$@"
+    detect_environment
+    plan_install
+    download_assets
+    backup_and_stop
+    install_program
+    install_service
+    save_installation
+    report_result
 }
 
 if [ "${SHELL_WOL_INSTALL_LIBRARY:-0}" != 1 ]; then main "$@"; fi
