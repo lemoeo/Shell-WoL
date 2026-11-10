@@ -12,7 +12,7 @@
 - YAML 注释及未知扩展字段尽量保留；保存时统一排版。
 - macOS、Windows、Linux，以及面向 OpenWrt 和兼容二次开发固件的交叉编译脚本与 procd 部署示例。
 - 简单的 Shell 终端菜单：显示状态、PID、内存，支持启动、重启和停止后台服务。
-- 系统文件锁自动释放，支持强制退出后的再次启动；后台初始化令牌可通过 `swol token` 查看。
+- 系统文件锁自动释放，支持强制退出后的再次启动；后台初始化令牌可通过 `wol token` 查看。
 
 ## 平台范围
 
@@ -26,30 +26,40 @@ macOS、Linux 和兼容路由器可使用 [安装脚本](scripts/install.sh)，�
 
 程序与数据放在同一根目录：Linux 默认 `/opt/shell-wol`，兼容的小米固件默认 `/data/shell-wol`，OpenWrt 默认 `/etc/shell-wol`，macOS 用户默认 `~/Library/Application Support/Shell-WoL`。根目录下分别为 `bin/`、`data/`、`backup/`，服务注册文件使用系统规定的位置。
 
-```sh
-# 从仓库下载入口脚本，查看后执行；Linux 系统安装需管理员权限
-curl --fail --location --proto '=https' --proto-redir '=https' \
-  https://raw.githubusercontent.com/lemoeo/Shell-WoL/main/scripts/install.sh \
-  --output install.sh
-sh install.sh
-# 或用户安装
-sh install.sh --user --yes
-```
+Linux 和路由器在 root 终端中执行（Linux 可先运行 `sudo -i`）。命令参考 [ShellCrash 安装说明](https://github.com/juewuy/ShellCrash/blob/dev/README_CN.md)，安装成功后自动加载 `/etc/profile`，随后输入 `wol` 即可打开菜单。
 
-安装器支持版本固定、SHA256 校验、保留数据升级和可选后台服务，不自动开放局域网访问。首次注册服务会直接启动；尚未设置管理员密码时，通过浏览器输入服务日志中的初始化令牌完成设置。
-
-安装后重新登录，输入 `swol` 打开菜单，或使用 `swol status`、`swol start`、`swol restart`、`swol stop`。结构参考 ShellClash，仅增加一个 `menu.sh`，直接调用已有系统服务。系统安装使用原安装账户；完整路径、菜单更新和卸载见 [终端菜单说明](docs/terminal-menu.md)。
-
-GitHub 无法访问时，也可以从 CDN 获取安装入口并使用同一 CDN 安装。地址可切换为 ShellCrash 使用的 `testingcf.jsdelivr.net`：
+GitHub 源：
 
 ```sh
-curl --fail --location --proto '=https' --proto-redir '=https' \
-  https://testingcf.jsdelivr.net/gh/lemoeo/Shell-WoL@main/scripts/install.sh \
-  --output install.sh
-sh install.sh --source jsdelivr --cdn-base https://testingcf.jsdelivr.net
+export url='https://raw.githubusercontent.com/lemoeo/Shell-WoL/main' \
+  && install_script="$(curl -fsSL "$url/scripts/install.sh")" \
+  && sh -c "$install_script" -- --source github \
+  && . /etc/profile >/dev/null 2>&1
 ```
 
-默认 CDN 为 `https://cdn.jsdelivr.net`；可用 `--cdn-base` 或环境变量 `SHELL_WOL_CDN_BASE` 修改。CDN 二进制需要先由发布流程同步 `assets-版本` 标签，已有 Release 可通过 **Sync CDN assets** 工作流补齐，见 [安装源和 CDN](docs/install.md#安装源和-cdn)。
+jsDelivr CDN 源（使用 ShellCrash 中的 `testingcf.jsdelivr.net`）：
+
+```sh
+export url='https://testingcf.jsdelivr.net/gh/lemoeo/Shell-WoL@main' \
+  && install_script="$(curl -fsSL "$url/scripts/install.sh")" \
+  && sh -c "$install_script" -- --source jsdelivr --cdn-base https://testingcf.jsdelivr.net \
+  && . /etc/profile >/dev/null 2>&1
+```
+
+macOS 默认 zsh 用户安装：
+
+```sh
+export url='https://raw.githubusercontent.com/lemoeo/Shell-WoL/main' \
+  && install_script="$(curl -fsSL "$url/scripts/install.sh")" \
+  && sh -c "$install_script" -- --source github --user \
+  && . "$HOME/.zshrc" >/dev/null 2>&1
+```
+
+使用 Bash 或其他 Shell 时，将最后一行的 profile 路径换为安装器提示的文件；也可安装后重新登录。Linux 用户安装和先下载查看脚本再执行的方式见 [安装指南](docs/install.md#发布前提与安装入口)。
+
+安装器支持版本固定、SHA256 校验、保留数据升级和可选后台服务，不自动开放局域网访问。首次注册服务会直接启动；尚未设置管理员密码时，通过 `wol token` 查看初始化令牌，再到浏览器设置密码。菜单支持 `wol status`、`wol start`、`wol restart`、`wol stop`；系统安装使用原安装账户，完整路径、更新和卸载见 [终端菜单说明](docs/terminal-menu.md)。
+
+安装器默认 CDN 为 `https://cdn.jsdelivr.net`；上面的 CDN 命令显式使用 `testingcf.jsdelivr.net`。切换 CDN 时，同时修改入口 `url` 的域名和 `--cdn-base`；也可用环境变量 `SHELL_WOL_CDN_BASE` 设置安装器默认 CDN。CDN 二进制需要先由发布流程同步 `assets-版本` 标签，已有 Release 可通过 **Sync CDN assets** 工作流补齐，见 [安装源和 CDN](docs/install.md#安装源和-cdn)。
 
 小米镜像固件（检测到 `/data/etc/crontabs/root` 且 `/data` 可写）注册后台服务时，默认使用持久化 `firewall.ShellWoL` include：启动 `/data/shell-wol/boot.sh`，恢复可能被重置的 `/etc/init.d/shell-wol`，交由 procd 管理。普通 OpenWrt 继续使用原生 procd 自启动；可通过 `--boot-mode native|firewall` 显式选择。该机制不增加端口放行规则，要求固件持久保存 firewall UCI 配置，实际重启仍需目标设备验证。禁用、恢复和排查见 [镜像固件自启动](docs/openwrt.md#镜像固件的持久自启动)。
 
@@ -74,21 +84,21 @@ go build -trimpath -o bin/shell-wol ./cmd/shell-wol
 ./bin/shell-wol serve --data-dir ./data
 ```
 
-Windows 将程序名换为 `shell-wol.exe`。直接运行 `serve` 会创建 `data/config.yaml` 和 `data/devices.yaml`，默认监听 `127.0.0.1:8080`。在本机浏览器打开该地址，输入终端显示的初始化令牌并设置密码（12–72 字节）。令牌只用于首次初始化，不会通过 Web 接口返回。请勿公开启动终端输出。
+Windows 将程序名换为 `shell-wol.exe`。直接运行 `serve` 会创建 `data/config.yaml` 和 `data/devices.yaml`，默认监听 `127.0.0.1:9000`。在本机浏览器打开该地址，输入终端显示的初始化令牌并设置密码（12–72 字节）。令牌只用于首次初始化，不会通过 Web 接口返回。请勿公开启动终端输出。
 
 ### 局域网访问与无本机浏览器的部署
 
 允许未设置密码时直接启动局域网监听：
 
 ```sh
-./bin/shell-wol serve --data-dir ./data --listen 0.0.0.0:8080
+./bin/shell-wol serve --data-dir ./data --listen 0.0.0.0:9000
 ```
 
-在局域网浏览器打开 `http://运行设备IP:8080`，输入启动终端显示的初始化令牌并设置管理员密码，再登录管理。新版后台服务可使用 `swol token`，或 `shell-wol token --data-dir PATH` 查看当前令牌，无需路由器提供 `logread`。私有令牌文件及旧锁迁移见 [运行状态文件说明](docs/runtime-state.md)。
+在局域网浏览器打开 `http://运行设备IP:9000`，输入启动终端显示的初始化令牌并设置管理员密码，再登录管理。新版后台服务可使用 `wol token`，或 `shell-wol token --data-dir PATH` 查看当前令牌，无需路由器提供 `logread`。私有令牌文件及旧锁迁移见 [运行状态文件说明](docs/runtime-state.md)。
 
 初始化令牌只对本次启动有效，不会通过 Web 返回；已设置密码后，初始化接口关闭。未设置密码或未登录时不能访问设备管理、设置或唤醒接口。也可选择先用 `init --password-stdin` 从终端设置密码。
 
-默认监听仍为 `127.0.0.1:8080`。`--listen` 只覆盖本次运行；持久修改须编辑 `config.yaml` 或在 Web 设置中保存，并重启服务。程序不自动改防火墙，请仅放行可信 LAN，勿开放到 WAN。
+新建配置默认监听 `127.0.0.1:9000`；升级保留已有 `config.yaml` 中的监听地址和端口，旧安装如需切换至 9000，请修改 `listen` 后重启。`--listen` 只覆盖本次运行；持久修改须编辑 `config.yaml` 或在 Web 设置中保存，并重启服务。程序不自动改防火墙，请仅放行可信 LAN，勿开放到 WAN。
 
 局域网 HTTP 不加密。推荐在可信网络内使用；需要远程访问时使用 VPN，或终止 TLS 的可信 HTTPS 反向代理。反向代理需保留原始 Host；将 `public_url` 设置为实际外部地址（如 `https://wol.example.com`），以校验浏览器 Origin 并启用 Secure Cookie。应用默认不信任转发头；通过 `trusted_proxies` 明确配置信任的代理后，才使用 `X-Forwarded-For` 识别限流来源（见下文），其他转发头不参与来源识别或 HTTPS 判断。不要把后端端口直接暴露给外部。目标电脑需接通电源、启用 BIOS/UEFI 和操作系统的 WoL，通常需有线连接。跨 VLAN、客户端隔离和外网广播不在首版支持范围内。
 
@@ -127,7 +137,7 @@ Web 前端每个请求最多等待 10 秒，包含响应内容读取和 YAML 导
 `config.yaml` 示例（`password_hash` 由初始化生成，不要填写明文密码）：
 
 ```yaml
-listen: 127.0.0.1:8080
+listen: 127.0.0.1:9000
 public_url: "" # 使用 HTTPS 反向代理时填写外部访问地址
 trusted_proxies: [] # 仅在使用可信反向代理时填写其 IP 或 CIDR；修改后重启
 password_hash: ""

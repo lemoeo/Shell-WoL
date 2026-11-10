@@ -407,8 +407,8 @@ run() {
     if [ "$(state_value menu_profile)" = /etc/profile ] && [ -w /etc/profile ] && [ ! -L /etc/profile ] &&
         [ -f "$ROOT/menu.sh" ] && [ ! -L "$ROOT/menu.sh" ] &&
         [ "$(checksum "$ROOT/menu.sh")" = "$(state_value menu_sha256)" ]; then
-        entry=$(printf "alias swol='sh \"%s/menu.sh\"' # Shell-WoL" "$ROOT")
-        if ! grep -Eq '^[[:space:]]*alias[[:space:]]+swol=' /etc/profile; then printf '%s\n' "$entry" >>/etc/profile; fi
+        entry=$(printf "alias wol='sh \"%s/menu.sh\"' # Shell-WoL" "$ROOT")
+        if ! grep -Eq '^[[:space:]]*alias[[:space:]]+wol=' /etc/profile; then printf '%s\n' "$entry" >>/etc/profile; fi
     fi
     deadline=$(($(date +%s) + 60))
     while ! { [ -x "$ROOT/bin/shell-wol" ] && [ -f "$ROOT/data/config.yaml" ] &&
@@ -608,7 +608,7 @@ check_menu_paths() {
     [ -w "$(dirname "$MENU_PROFILE")" ] || fail "无法写入菜单快捷入口：$MENU_PROFILE"
     if [ -e "$MENU_PROFILE" ]; then
         [ -f "$MENU_PROFILE" ] && [ -w "$MENU_PROFILE" ] || fail '菜单 profile 不是可写普通文件'
-        if grep -E '^[[:space:]]*alias[[:space:]]+swol=' "$MENU_PROFILE" | grep -Fvx "$MENU_ALIAS" >/dev/null; then fail 'profile 已有其他 swol 别名'; fi
+        if grep -E '^[[:space:]]*alias[[:space:]]+wol=' "$MENU_PROFILE" | grep -Fvx "$MENU_ALIAS" >/dev/null; then fail 'profile 已有其他 wol 别名'; fi
     fi
 }
 install_menu() {
@@ -620,7 +620,8 @@ install_menu() {
     MENU_ENTRY_TMP=$(mktemp "$MENU_PROFILE.shell-wol.XXXXXX")
     if [ "$OLD_PROFILE" = 1 ]; then
         cp -p "$MENU_PROFILE" "$MENU_ENTRY_TMP"
-        awk -v entry="$MENU_ALIAS" '$0!=entry' "$MENU_PROFILE" >"$MENU_ENTRY_TMP"
+        legacy_entry=$(printf "alias swol='sh \"%s/menu.sh\"' # Shell-WoL" "$ROOT")
+        awk -v entry="$MENU_ALIAS" -v legacy="$legacy_entry" '$0!=entry && $0!=legacy' "$MENU_PROFILE" >"$MENU_ENTRY_TMP"
     else chmod 644 "$MENU_ENTRY_TMP"; fi
     printf '%s\n' "$MENU_ALIAS" >>"$MENU_ENTRY_TMP"
     if [ "$OLD_PROFILE" = 1 ]; then cmp -s "$MENU_PROFILE" "$TMP/old-menu-profile" || fail 'profile 在注册期间发生变化'
@@ -761,7 +762,7 @@ main() {
     else prior_service=none; fi
     if [ -f "$ROOT/.shell-wol-install" ]; then MENU_PROFILE=$(state_value menu_profile); fi
     [ -n "$MENU_PROFILE" ] || MENU_PROFILE=$(menu_profile_path)
-    MENU_ALIAS=$(printf "alias swol='sh \"%s/menu.sh\"' # Shell-WoL" "$ROOT")
+    MENU_ALIAS=$(printf "alias wol='sh \"%s/menu.sh\"' # Shell-WoL" "$ROOT")
     check_menu_paths
     if [ "$WANT_SERVICE" = 1 ]; then
         choose_service
@@ -936,7 +937,7 @@ main() {
     COMMITTED=1
     say "安装完成：$BIN/shell-wol"
     say "数据目录：$DATA"
-    say "终端菜单：swol；重新登录或执行 . \"$MENU_PROFILE\" 后生效。"
+    say "终端菜单：wol；重新登录或执行 . \"$MENU_PROFILE\" 后生效。"
     say "完整入口：sh \"$ROOT/menu.sh\"（系统安装以 root 运行）。"
     if [ -n "$SERVICE_USER" ] && [ "$USER_MODE" = 0 ]; then
         say "手动运行（先停止后台服务）：sudo -u \"$SERVICE_USER\" \"$BIN/shell-wol\" serve --data-dir \"$DATA\""
@@ -946,8 +947,8 @@ main() {
         case "$SERVICE" in
             systemd) say '查看令牌：sudo journalctl -u shell-wol -n 30 --no-pager' ;;
             procd)
-                if [ "$NEW_SYSTEM_LOCK" = 1 ]; then say "查看令牌：swol token 或 \"$BIN/shell-wol\" token --data-dir \"$DATA\""
-                else say '查看令牌：logread -e shell-wol（新版本可通过 swol token 查看）'; fi ;;
+                if [ "$NEW_SYSTEM_LOCK" = 1 ]; then say "查看令牌：wol token 或 \"$BIN/shell-wol\" token --data-dir \"$DATA\""
+                else say '查看令牌：logread -e shell-wol（新版本可通过 wol token 查看）'; fi ;;
             launchd-user|launchd-system) say "查看令牌：$DATA/service.log（系统安装使用 sudo 读取）" ;;
             none) say '手动启动 serve 后，在启动终端查看令牌。' ;;
         esac
@@ -956,7 +957,7 @@ main() {
             say "sudo -u \"$SERVICE_USER\" \"$BIN/shell-wol\" init --data-dir \"$DATA\" --password-stdin"
         else say "\"$BIN/shell-wol\" init --data-dir \"$DATA\" --password-stdin"; fi
     fi
-    say '默认仅监听 127.0.0.1:8080。可显式配置 LAN 监听后通过浏览器初始化；安装器不会修改端口放行规则。'
+    say '默认仅监听 127.0.0.1:9000。可显式配置 LAN 监听后通过浏览器初始化；安装器不会修改端口放行规则。'
     if [ "$SERVICE" != none ]; then say "服务类型：$SERVICE；服务文件：$SERVICE_FILE"; fi
     if [ "$BOOT_MODE" = firewall ]; then
         say "自启动：firewall.ShellWoL → $ROOT/boot.sh → procd（enabled=$ENABLE_BOOT）"

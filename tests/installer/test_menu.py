@@ -41,13 +41,34 @@ control "$1"
         state=(self.root/'.shell-wol-install').read_text()
         self.assertIn('schema=1',state)
         self.assertNotIn('manager_',state)
-        self.assertEqual((self.f.home/'.profile').read_text().count('alias swol='),1)
-        r=subprocess.run(['sh','-c','. "$1"\nswol status','test',str(self.f.home/'.profile')],
+        self.assertEqual((self.f.home/'.profile').read_text().count('alias wol='),1)
+        r=subprocess.run(['sh','-c','. "$1"\nwol status','test',str(self.f.home/'.profile')],
                          env=self.f.env,text=True,capture_output=True)
         self.assertEqual(r.returncode,1,r.stdout+r.stderr)
         self.assertIn('运行状态：已停止',r.stdout)
         self.assertFalse((self.root/'control.sh').exists())
         self.assertFalse((self.root/'lib').exists())
+
+    def test_upgrade_replaces_only_owned_legacy_alias(self):
+        self.f.run_install()
+        profile=self.f.home/'.profile'
+        legacy=profile.read_text().replace('alias wol=', 'alias swol=')
+        foreign='alias swol="echo user command"\n'
+        profile.write_text('# user settings\n'+legacy+foreign)
+        self.f.run_install()
+        result=profile.read_text()
+        self.assertEqual(result.count('alias wol='),1)
+        self.assertEqual(result.count('alias swol='),1)
+        self.assertIn(foreign,result)
+        self.assertNotIn("alias swol='sh",result)
+
+    def test_foreign_wol_alias_blocks_install_without_overwriting(self):
+        self.f.run_install()
+        profile=self.f.home/'.profile'
+        profile.write_text('alias wol="echo user command"\n')
+        before=profile.read_bytes()
+        self.f.run_install(success=False)
+        self.assertEqual(profile.read_bytes(),before)
 
     def test_bad_menu_checksum_preserves_program_and_profile(self):
         self.f.run_install()

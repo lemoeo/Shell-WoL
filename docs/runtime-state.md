@@ -42,7 +42,7 @@ rmdir /data/shell-wol/data/.lock
 ## 本地查看初始化令牌
 
 ```sh
-swol token
+wol token
 # 小米路由器也可以直接使用：
 /data/shell-wol/bin/shell-wol token --data-dir /data/shell-wol/data
 ```

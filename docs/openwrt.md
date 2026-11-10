@@ -38,13 +38,27 @@ free
 
 ## 2. 安装器部署（推荐）
 
-详见 [安装与升级指南](install.md)。从仓库下载 `scripts/install.sh`，在路由器上以 root 执行。支持 GitHub 和 jsDelivr 源；二进制和模板始终固定到同一版本：
+详见 [安装与升级指南](install.md)。在路由器 root 终端执行以下一组命令，注册后台服务并加载 `wol` 菜单别名。二进制和模板始终固定到同一版本。
+
+GitHub 源：
 
 ```sh
-sh install.sh --service
-# 使用 ShellCrash 中的 CDN 域名
-sh install.sh --source jsdelivr --cdn-base https://testingcf.jsdelivr.net --service
+export url='https://raw.githubusercontent.com/lemoeo/Shell-WoL/main' \
+  && install_script="$(curl -fsSL "$url/scripts/install.sh")" \
+  && sh -c "$install_script" -- --source github --service \
+  && . /etc/profile >/dev/null 2>&1
 ```
+
+jsDelivr CDN 源（使用 ShellCrash 中的域名）：
+
+```sh
+export url='https://testingcf.jsdelivr.net/gh/lemoeo/Shell-WoL@main' \
+  && install_script="$(curl -fsSL "$url/scripts/install.sh")" \
+  && sh -c "$install_script" -- --source jsdelivr --cdn-base https://testingcf.jsdelivr.net --service \
+  && . /etc/profile >/dev/null 2>&1
+```
+
+安装成功后输入 `wol` 进入交互菜单，或使用 `wol token` 查看初始化令牌；安装失败时不会继续加载 profile。入口脚本保留证书校验，profile 加载使用兼容路由器 sh 的重定向语法。
 
 未传 `--source` 时使用 GitHub，下载失败直接停止；`--source jsdelivr` 使用所选 CDN，不自动换源。`--cdn-base` 或 `SHELL_WOL_CDN_BASE` 可修改 CDN 源站，地址不带 `/gh`。也可直接从该 CDN 的 `/gh/lemoeo/Shell-WoL@main/scripts/install.sh` 获取入口。CDN 二进制必须由发布或同步工作流先补齐资产标签，见 [安装源和 CDN](install.md#安装源和-cdn)。
 
@@ -116,14 +130,14 @@ logread -e shell-wol
 
 ```sh
 /etc/init.d/shell-wol stop
-sed -i 's/^listen:.*/listen: 0.0.0.0:8080/' /etc/shell-wol/data/config.yaml
+sed -i 's/^listen:.*/listen: 0.0.0.0:9000/' /etc/shell-wol/data/config.yaml
 /etc/init.d/shell-wol start
-swol token  # 新版无需 logread
+wol token  # 新版无需 logread
 ```
 
-新程序使用 `swol token` 或 `shell-wol token --data-dir PATH` 读取当前服务令牌；菜单第 5 项也可查看，不依赖 logread。旧程序从最近启动日志取令牌。在浏览器设置管理员密码后再登录。密码须为 12–72 字节；令牌不通过网页返回，重启后旧令牌失效。也可选择停止服务后通过 `init --password-stdin` 设置密码，但不是启动的前置条件。
+新程序使用 `wol token` 或 `shell-wol token --data-dir PATH` 读取当前服务令牌；菜单第 5 项也可查看，不依赖 logread。旧程序从最近启动日志取令牌。在浏览器设置管理员密码后再登录。密码须为 12–72 字节；令牌不通过网页返回，重启后旧令牌失效。也可选择停止服务后通过 `init --password-stdin` 设置密码，但不是启动的前置条件。
 
-从同一 LAN 的电脑或手机访问 `http://路由器LAN地址:8080`。若端口已占用，更换配置中的端口。确保防火墙仅允许可信 LAN 访问，不能假设二次开发固件具有 OpenWrt 的默认规则；无需公网端口映射。
+从同一 LAN 的电脑或手机访问 `http://路由器LAN地址:9000`。若端口已占用，更换配置中的端口。确保防火墙仅允许可信 LAN 访问，不能假设二次开发固件具有 OpenWrt 的默认规则；无需公网端口映射。
 
 发送网卡选择目标电脑所在 LAN 的实际 IPv4 网卡，例如 `br-lan`。广播地址按 IP 和子网掩码计算，不能固定假设为 `192.168.1.255`。目标电脑需启用 WoL 并保持供电，发送成功不等于已开机。
 

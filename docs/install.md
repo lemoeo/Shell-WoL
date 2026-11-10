@@ -6,12 +6,46 @@
 
 维护者推送 `v主版本.次版本.补丁` 标签后，GitHub Actions 执行测试、交叉编译、发布固定的 CDN 资产标签，再发布 Release 并更新 CDN 最新版本。预发布标签可使用 `v0.1.0-beta.1`，会标记为 prerelease，且不更新 CDN 最新版本。Release 只上传各平台二进制、VERSION 和二进制 SHA256SUMS；CDN 同步相同构建文件。安装脚本和三份服务模板保留在源码仓库，不作为 Release 附件；仅推送源码不会自动发布二进制。没有 Release 时，可先使用本地构建。
 
-从仓库 main 分支下载最新安装入口，查看后运行：
+参考 [ShellCrash 中文安装说明](https://github.com/juewuy/ShellCrash/blob/dev/README_CN.md)，可以设置入口地址后直接安装，并在成功后加载菜单别名。Linux 和路由器的系统安装请在 root 终端执行；Linux 可先使用 `sudo -i`。
+
+GitHub 源：
 
 ```sh
-curl --fail --location --proto '=https' --proto-redir '=https' \
-  https://raw.githubusercontent.com/lemoeo/Shell-WoL/main/scripts/install.sh \
-  --output install.sh
+export url='https://raw.githubusercontent.com/lemoeo/Shell-WoL/main' \
+  && install_script="$(curl -fsSL "$url/scripts/install.sh")" \
+  && sh -c "$install_script" -- --source github \
+  && . /etc/profile >/dev/null 2>&1
+```
+
+jsDelivr CDN 源：
+
+```sh
+export url='https://testingcf.jsdelivr.net/gh/lemoeo/Shell-WoL@main' \
+  && install_script="$(curl -fsSL "$url/scripts/install.sh")" \
+  && sh -c "$install_script" -- --source jsdelivr --cdn-base https://testingcf.jsdelivr.net \
+  && . /etc/profile >/dev/null 2>&1
+```
+
+两条命令都从源码 `main/scripts/install.sh` 下载安装入口；CDN 命令同时指定后续二进制、模板及菜单使用的 CDN。替换域名时须同步修改 `url` 和 `--cdn-base`，例如均改为 `cdn.jsdelivr.net`。
+
+命令先确认下载成功，再执行脚本；保留 HTTPS 证书校验。安装成功后才加载 `/etc/profile`，使用兼容 POSIX sh 的 `>/dev/null 2>&1` 重定向，随后可直接输入 `wol`。安装器仍会询问安装目录、是否注册后台服务等选项，升级使用相同命令。固定安装源后不会再询问源选择。
+
+macOS 默认 zsh 用户安装使用个人 profile：
+
+```sh
+export url='https://raw.githubusercontent.com/lemoeo/Shell-WoL/main' \
+  && install_script="$(curl -fsSL "$url/scripts/install.sh")" \
+  && sh -c "$install_script" -- --source github --user \
+  && . "$HOME/.zshrc" >/dev/null 2>&1
+```
+
+Linux `--user` 安装、macOS Bash 或其他 Shell，请按安装器提示加载对应的 `~/.bashrc`、`~/.bash_profile` 或 `~/.profile`。不手动加载时，重新登录也可生效。
+
+也可先下载查看脚本，再执行，便于传入其他选项：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/lemoeo/Shell-WoL/main/scripts/install.sh -o install.sh
+# 查看 install.sh 后执行；系统安装使用 root，用户安装加 --user
 sh install.sh
 ```
 
@@ -29,7 +63,7 @@ sh install.sh
 
 首次解析 latest 后，二进制与模板全部固定到同一版本，不会改用 main 或旧版模板。仅访问所选源，下载或校验失败直接停止；需要换源时重新执行并指定 `--source`。
 
-支持文件锁的新程序将菜单和清单固定到同一个程序版本标签；旧程序沿用安装器 `MENU_REF` 的兼容提交，两者均避免 CDN 的 main 分支缓存不同步。校验通过后安装为根目录的 `menu.sh`，通过 profile 别名 `swol` 进入。系统文件锁和 `token` 功能需要新 Go 二进制；不增加额外管理包标签。完整命令及权限说明见 [终端菜单](terminal-menu.md)。
+支持文件锁的新程序将菜单和清单固定到同一个程序版本标签；旧程序沿用安装器 `MENU_REF` 的兼容提交，两者均避免 CDN 的 main 分支缓存不同步。校验通过后安装为根目录的 `menu.sh`，通过 profile 别名 `wol` 进入。系统文件锁和 `token` 功能需要新 Go 二进制；不增加额外管理包标签。完整命令及权限说明见 [终端菜单](terminal-menu.md)。
 
 旧 Release 已上传的脚本和模板无需删除。**旧标签如果没有 `deploy/SHA256SUMS`，新安装器无法为该版本自动安装服务**；可使用原配套安装方式，或不加 `--service` 只安装程序并手动运行。已有受管理服务的升级会保留服务类型，因此也需要选择包含模板清单的新标签。不要移动旧标签来补文件；应提交文件并发布新版本。
 
@@ -62,14 +96,7 @@ export SHELL_WOL_CDN_BASE=https://testingcf.jsdelivr.net
 sh install.sh --source jsdelivr --service --yes
 ```
 
-安装入口本身也需要可访问。通过 CDN 下载入口的示例（替换域名即可切换）：
-
-```sh
-curl --fail --location --proto '=https' --proto-redir '=https' \
-  https://cdn.jsdelivr.net/gh/lemoeo/Shell-WoL@main/scripts/install.sh \
-  --output install.sh
-sh install.sh --source jsdelivr
-```
+安装入口本身也需要可访问。上面的 CDN 安装命令同时配置入口与后续文件的源站；若已下载安装脚本，可继续使用 `sh install.sh --source jsdelivr --cdn-base https://testingcf.jsdelivr.net`。jsDelivr 缓存可能延迟更新，固定入口方式见上文。
 
 以 `v0.1.2` 为例，二进制使用 `https://cdn.jsdelivr.net/gh/lemoeo/Shell-WoL@assets-v0.1.2/shell-wol-linux-arm64`，模板使用 `https://cdn.jsdelivr.net/gh/lemoeo/Shell-WoL@v0.1.2/deploy/shell-wol.openwrt`。jsDelivr 读取仓库文件，不能直接镜像 Release 附件；维护者必须先同步资产标签。旧 Release 未同步时，CDN 安装会失败，可重新执行脚本并选择 GitHub 源。
 
@@ -146,7 +173,7 @@ sh install.sh --version v0.1.0 \
 
 ## 首次密码与服务启动
 
-首次安装执行不含密码的 `init`，生成默认 YAML；路由器默认 `log_limit: 0`，减少操作记录写闪存。安装器不接收或保存密码、不改变 LAN 监听和端口规则；firewall 模式仅注册本工具的启动 include。默认只监听 `127.0.0.1:8080`。
+首次安装执行不含密码的 `init`，生成默认 YAML；路由器默认 `log_limit: 0`，减少操作记录写闪存。安装器不接收或保存密码、不改变 LAN 监听和端口规则；firewall 模式仅注册本工具的启动 include。默认只监听 `127.0.0.1:9000`。
 
 服务模式检测如下：
 
@@ -163,7 +190,7 @@ sh install.sh --version v0.1.0 \
 
 首次通过浏览器设置密码：
 
-1. 本机访问默认地址；局域网访问需先在服务停止时将 `data/config.yaml` 中 `listen` 改为 LAN 地址或 `0.0.0.0:8080`，然后启动服务。默认不会自动开放 LAN 监听。
+1. 本机访问默认地址；局域网访问需先在服务停止时将 `data/config.yaml` 中 `listen` 改为 LAN 地址或 `0.0.0.0:9000`，然后启动服务。默认不会自动开放 LAN 监听。
 2. 从当前启动的终端或服务日志取得随机初始化令牌。
 3. 打开管理页面，输入令牌，设置 12–72 字节的密码。
 4. 使用新密码登录；不需要重启服务。
@@ -177,7 +204,7 @@ sh install.sh --version v0.1.0 \
 sudo journalctl -u shell-wol -n 30 --no-pager
 
 # 新版 OpenWrt/小米固件，无需 logread
-swol token
+wol token
 # 或：/data/shell-wol/bin/shell-wol token --data-dir /data/shell-wol/data
 # 旧版仍使用 logread -e shell-wol
 
@@ -190,7 +217,7 @@ sudo cat "/Library/Application Support/Shell-WoL/data/service.log"
 
 新程序优先使用 `token` 命令：它读取私有 `data/.setup-token`，核对当前服务锁及实例标识；已初始化则不显示历史令牌。日志仍可能保留旧令牌，不要公开令牌或启动日志。文件生命周期及权限见 [运行状态文件](runtime-state.md)。也可先停止服务，再通过 `init --password-stdin` 设置密码；Linux systemd 使用 `sudo -u shell-wol`，macOS 系统安装使用 `sudo -u daemon`，用户安装使用当前用户，路由器通常使用 root。不要用错误账户生成仅该账户可读的 0600 配置文件。
 
-路由器需检查 LAN/WAN 防火墙。桌面模式可直接运行 `serve`，局域网模式可加 `--listen 0.0.0.0:8080`。不要同时运行手动进程和使用同一数据目录的后台服务。
+路由器需检查 LAN/WAN 防火墙。桌面模式可直接运行 `serve`，局域网模式可加 `--listen 0.0.0.0:9000`。不要同时运行手动进程和使用同一数据目录的后台服务。
 
 ## 升级、冲突与回退
 
@@ -248,7 +275,7 @@ sudo sh uninstall.sh --install-dir /opt/shell-wol --purge
 | 内容 | 默认 | `--purge` |
 | --- | --- | --- |
 | 受管理的服务文件及开机启动 | 移除 | 移除 |
-| `menu.sh` 和本安装的 `swol` 别名 | 移除 | 移除 |
+| `menu.sh` 和本安装的 `wol` 别名 | 移除 | 移除 |
 | 私有初始化令牌及本安装的运行锁文件 | 移除 | 移除 |
 | 本安装的 firewall include、`boot.sh`、持久 procd 副本及禁用标记 | 移除 | 移除 |
 | `bin/shell-wol`、`backup/shell-wol.previous` | 删除 | 删除 |

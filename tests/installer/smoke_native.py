@@ -29,7 +29,7 @@ try:
         free.bind(('127.0.0.1', 0))
         port = free.getsockname()[1]
     config = data / 'config.yaml'
-    config.write_text(config.read_text().replace('127.0.0.1:8080', f'0.0.0.0:{port}'))
+    config.write_text(config.read_text().replace('127.0.0.1:9000', f'0.0.0.0:{port}'))
     log = fixture.base / 'server.log'
     with log.open('w') as stdout:
         process = subprocess.Popen([str(installed), 'serve', '--data-dir', str(data)],
@@ -80,7 +80,7 @@ try:
             bind_data=fixture.base/'bind-failure'
             subprocess.run([str(installed),'init','--data-dir',str(bind_data)],check=True,stdout=subprocess.DEVNULL)
             bind_config=bind_data/'config.yaml'
-            bind_config.write_text(bind_config.read_text().replace('127.0.0.1:8080',f'0.0.0.0:{port}'))
+            bind_config.write_text(bind_config.read_text().replace('127.0.0.1:9000',f'0.0.0.0:{port}'))
             failed=subprocess.run([str(installed),'serve','--data-dir',str(bind_data)],text=True,capture_output=True)
             assert failed.returncode!=0 and not (bind_data/'.setup-token').exists()
             subprocess.run([str(installed),'lock','--data-dir',str(bind_data)],check=True,stdout=subprocess.DEVNULL)

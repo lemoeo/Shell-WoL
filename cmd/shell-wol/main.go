@@ -31,7 +31,7 @@ func run(args []string) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
 		fmt.Println(`Shell-WoL — 网络唤醒工具
 命令：
-  serve       启动 Web 管理（默认 127.0.0.1:8080）
+  serve       启动 Web 管理（默认 127.0.0.1:9000）
   init        创建 YAML 数据；--password-stdin 从标准输入设置管理员密码
   wake        --device ID 或 --mac MAC [--broadcast IPv4 --port 9 --repeat 3 --interface 名称]
   check       只读校验 YAML；--require-password 检查密码；--running 检查服务接口

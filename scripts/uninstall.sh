@@ -276,12 +276,13 @@ finish_uninstall() {
         fi
         service_reload || fail '服务文件已移除，但重新加载失败；程序和数据保留，可重试'
     fi
-    entry=$(printf "alias swol='sh \"%s/menu.sh\"' # Shell-WoL" "$ROOT")
-    if [ -n "$MENU_PROFILE" ] && [ -f "$MENU_PROFILE" ] && grep -Fqx "$entry" "$MENU_PROFILE"; then
+    entry=$(printf "alias wol='sh \"%s/menu.sh\"' # Shell-WoL" "$ROOT")
+    legacy_entry=$(printf "alias swol='sh \"%s/menu.sh\"' # Shell-WoL" "$ROOT")
+    if [ -n "$MENU_PROFILE" ] && [ -f "$MENU_PROFILE" ] && { grep -Fqx "$entry" "$MENU_PROFILE" || grep -Fqx "$legacy_entry" "$MENU_PROFILE"; }; then
         before=$(checksum "$MENU_PROFILE")
         STATE_TMP=$(mktemp "$MENU_PROFILE.shell-wol.XXXXXX")
         cp -p "$MENU_PROFILE" "$STATE_TMP"
-        awk -v entry="$entry" '$0!=entry' "$MENU_PROFILE" >"$STATE_TMP"
+        awk -v entry="$entry" -v legacy="$legacy_entry" '$0!=entry && $0!=legacy' "$MENU_PROFILE" >"$STATE_TMP"
         [ "$(checksum "$MENU_PROFILE")" = "$before" ] || fail 'profile 在清理期间发生变化'
         mv -f "$STATE_TMP" "$MENU_PROFILE"; STATE_TMP=
     fi
@@ -373,7 +374,7 @@ main() {
     if [ "$BOOT_MODE" = firewall ]; then say "移除自启动：firewall.ShellWoL、$ROOT/boot.sh、$ROOT/service/shell-wol.procd"; fi
     say "删除程序：$ROOT/bin/shell-wol"
     say "删除旧程序：$ROOT/backup/shell-wol.previous"
-    if [ -n "$MENU_SHA" ]; then say "删除终端菜单：$ROOT/menu.sh；清理本安装的 swol 别名"; fi
+    if [ -n "$MENU_SHA" ]; then say "删除终端菜单：$ROOT/menu.sh；清理本安装的 wol 别名"; fi
     if [ "$PURGE" = 1 ]; then
         say '清除以下数据文件（存在时）：'
         for name in config.yaml devices.yaml events.yaml credentials.yaml credentials.key service.log service.err.log; do say "  $DATA/$name"; done

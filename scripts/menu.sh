@@ -133,9 +133,9 @@ main() {
             "$BIN" token --data-dir "$DATA"; return $? ;;
         start|stop|restart) control "$1"; return $? ;;
         menu) ;;
-        *) error '用法：swol [status|start|restart|stop|token]'; return 2 ;;
+        *) error '用法：wol [status|start|restart|stop|token]'; return 2 ;;
     esac
-    [ -t 0 ] && [ -t 1 ] || { error '交互菜单需要终端，可使用 swol status'; return 2; }
+    [ -t 0 ] && [ -t 1 ] || { error '交互菜单需要终端，可使用 wol status'; return 2; }
     while :; do
         printf '\n----------------------------------------\n'
         status || :

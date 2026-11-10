@@ -22,7 +22,7 @@ type Config struct {
 }
 
 func DefaultConfig() Config {
-	return Config{Listen: "127.0.0.1:8080", Broadcast: "255.255.255.255", Port: 9, Repeat: 3, LogLimit: 100}
+	return Config{Listen: "127.0.0.1:9000", Broadcast: "255.255.255.255", Port: 9, Repeat: 3, LogLimit: 100}
 }
 func (c Config) Validate() error {
 	if _, err := parseTrustedProxies(c.TrustedProxies); err != nil {

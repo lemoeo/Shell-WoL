@@ -99,6 +99,15 @@ class UninstallTests(unittest.TestCase):
         before=profile.read_bytes()
         self.uninstall()
         self.assertEqual(profile.read_bytes(),before)
+    def test_uninstall_removes_owned_legacy_alias_and_preserves_foreign(self):
+        self.install()
+        profile=self.fixture.home/'.profile'
+        legacy=profile.read_text().replace('alias wol=', 'alias swol=')
+        foreign='alias wol="echo user command"\n'
+        profile.write_text('# user settings\n'+legacy+foreign)
+        self.uninstall()
+        self.assertEqual(profile.read_text(),'# user settings\n'+foreign)
+
     def test_purge_preserves_unknown_files_and_empty_folders(self):
         self.install();(self.root/'notes.txt').write_text('user file')
         (self.root/'data/custom.yaml').write_text('custom: yes')
