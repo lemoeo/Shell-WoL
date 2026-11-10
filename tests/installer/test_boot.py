@@ -123,6 +123,7 @@ class BootTests(unittest.TestCase):
 
     def install(self, *args, mode='firewall', success=True):
         prefix = '. "$1"; shift; BOOT_LOCK="$FIXTURE_SERVICE/boot.lock"; '
+        prefix += 'menu_profile_path() { echo "$FIXTURE_SERVICE/profile"; }; '
         prefix += 'detect_firmware() { echo openwrt; }; '
         prefix += 'choose_service() { SERVICE=procd; SERVICE_FILE="$FIXTURE_SERVICE/shell-wol"; SERVICE_USER=; SERVICE_GROUP=; LAUNCH_DOMAIN=; }; '
         return self.invoke(prefix+'main "$@"', fixture.INSTALLER,

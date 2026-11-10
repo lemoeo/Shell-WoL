@@ -58,7 +58,7 @@ if url.startswith(release):
  else:sys.exit(22)
 elif url.startswith(repo):
  tail=url[len(repo):].split('/')
- if len(tail)==3 and tail[1]=='deploy':source=root/'repository'/tail[0]/tail[1]/tail[2]
+ if len(tail)==3 and tail[1] in ('deploy','scripts'):source=root/'repository'/tail[0]/tail[1]/tail[2]
  else:sys.exit(22)
 elif url.startswith(cdn):
  tail=url[len(cdn):].split('/')
@@ -66,7 +66,7 @@ elif url.startswith(cdn):
   version=os.environ.get('CDN_VERSION')
   source=(root/'releases'/version/'VERSION') if version else root/'assets'/'VERSION'
  elif len(tail)==2 and tail[0].startswith('assets-v'):source=root/'releases'/tail[0][7:]/tail[1]
- elif len(tail)==3 and tail[1]=='deploy':source=root/'repository'/tail[0]/tail[1]/tail[2]
+ elif len(tail)==3 and tail[1] in ('deploy','scripts'):source=root/'repository'/tail[0]/tail[1]/tail[2]
  else:sys.exit(22)
  if os.environ.get('CORRUPT_CDN_SUFFIX') and url.endswith(os.environ['CORRUPT_CDN_SUFFIX']):
   out.write_text('corrupt CDN response');sys.exit(0)
@@ -99,8 +99,9 @@ class InstallerTests(unittest.TestCase):
         self.tools = self.base/'tools'; self.tools.mkdir()
         self.root = self.base/'Install With Spaces'
         self.service = self.base/'service'; self.service.mkdir()
+        self.home=self.base/'home';self.home.mkdir()
         self.env = os.environ.copy()
-        self.env.update(PATH=str(self.tools)+os.pathsep+self.env['PATH'], FIXTURE_ROOT=str(self.base), FIXTURE_RELEASE_BASE='https://github.com/lemoeo/Shell-WoL/releases', FIXTURE_REPO_BASE='https://raw.githubusercontent.com/lemoeo/Shell-WoL', FIXTURE_SERVICE=str(self.service), SHELL_WOL_INSTALL_LIBRARY='1')
+        self.env.update(PATH=str(self.tools)+os.pathsep+self.env['PATH'], HOME=str(self.home), SHELL='/bin/sh', FIXTURE_ROOT=str(self.base), FIXTURE_RELEASE_BASE='https://github.com/lemoeo/Shell-WoL/releases', FIXTURE_REPO_BASE='https://raw.githubusercontent.com/lemoeo/Shell-WoL', FIXTURE_SERVICE=str(self.service), SHELL_WOL_INSTALL_LIBRARY='1')
         self.tool('curl', CURL)
         self.tool('systemctl', SYSTEMCTL)
         self.tool('sleep', '#!/bin/sh\nexit 0\n')
@@ -119,6 +120,10 @@ class InstallerTests(unittest.TestCase):
         for name in ('shell-wol.service','shell-wol.openwrt','shell-wol.plist'):
             shutil.copyfile(REPO/'deploy'/name,self.template_dir/name)
         (self.template_dir/'SHA256SUMS').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in sorted(self.template_dir.iterdir()) if p.name!='SHA256SUMS'))
+        self.menu_dir=self.base/'repository/main/scripts';self.menu_dir.mkdir(parents=True,exist_ok=True)
+        shutil.copyfile(REPO/'scripts/menu.sh',self.menu_dir/'menu.sh')
+        manifest=self.base/'repository/main/deploy/SHA256SUMS';manifest.parent.mkdir(parents=True,exist_ok=True)
+        manifest.write_text(hashlib.sha256((self.menu_dir/'menu.sh').read_bytes()).hexdigest()+'  menu.sh\n')
         self.manifest()
     def manifest(self):
         (self.assets/'SHA256SUMS').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in sorted(self.assets.glob('shell-wol-*'))))
@@ -239,7 +244,8 @@ class InstallerTests(unittest.TestCase):
         self.assertIn('/download/v1.2.3/shell-wol-linux-amd64',requests)
         self.assertIn('/Shell-WoL/v1.2.3/deploy/SHA256SUMS',requests)
         self.assertIn('/Shell-WoL/v1.2.3/deploy/shell-wol.service',requests)
-        self.assertNotIn('/main/',requests)
+        self.assertNotIn('/main/deploy/shell-wol.',requests)
+        self.assertIn('/main/scripts/menu.sh',requests)
         self.assertNotIn('/v1.2.4/',requests)
     def test_template_corruption_preserves_existing_install(self):
         self.run_install('--service',service=True)
@@ -274,6 +280,7 @@ class InstallerTests(unittest.TestCase):
         self.assertNotIn('/download/v1.2.3/shell-wol.service',(self.base/'downloads').read_text())
     def test_template_checksum_helper_detects_stale_manifest(self):
         project=self.base/'project';(project/'scripts').mkdir(parents=True);(project/'deploy').mkdir()
+        shutil.copyfile(REPO/'scripts/menu.sh',project/'scripts/menu.sh')
         helper=project/'scripts/template-checksums.sh';shutil.copyfile(REPO/'scripts/template-checksums.sh',helper)
         for name in ('shell-wol.service','shell-wol.openwrt','shell-wol.plist','SHA256SUMS'):
             shutil.copyfile(REPO/'deploy'/name,project/'deploy'/name)

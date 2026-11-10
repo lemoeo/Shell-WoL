@@ -13,6 +13,8 @@ STATE_TMP=
 BOOT_MODE=native
 BOOT_LOCK=/tmp/shell-wol-boot.lock
 OWN_BOOT_LOCK=0
+MENU_PROFILE=
+MENU_SHA=
 
 say() { printf '%s\n' "$*"; }
 fail() { say "错误：$*" >&2; exit 1; }
@@ -218,6 +220,13 @@ check_paths() {
     check_file "$STATE"
     check_file "$ROOT/bin/shell-wol"
     check_file "$ROOT/backup/shell-wol.previous"
+    if [ -n "$MENU_SHA" ]; then check_file "$ROOT/menu.sh"; fi
+    if [ -n "$MENU_PROFILE" ]; then
+        validate_dir "$MENU_PROFILE"
+        parent=$MENU_PROFILE
+        while [ "$parent" != / ]; do [ ! -L "$parent" ] || fail '菜单 profile 路径含符号链接'; parent=$(dirname "$parent"); done
+        check_file "$MENU_PROFILE"
+    fi
     if [ "$BOOT_MODE" = firewall ]; then
         [ ! -L "$ROOT/service" ] || fail '拒绝符号链接 service 目录'
         if [ -e "$ROOT/service" ]; then [ -d "$ROOT/service" ] || fail 'service 不是目录'; fi
@@ -287,6 +296,7 @@ main() {
         fi
     done
     SERVICE=$(state_value service)
+    MENU_PROFILE=$(state_value menu_profile); MENU_SHA=$(state_value menu_sha256)
     case "$SERVICE" in none|systemd|procd|launchd-user|launchd-system) ;; *) fail '安装元数据中的服务类型无效' ;; esac
     if [ "$BOOT_MODE" = firewall ]; then [ "$SERVICE" = procd ] || fail '持久启动元数据的服务类型无效'; fi
     check_paths
@@ -305,6 +315,7 @@ main() {
     if [ "$BOOT_MODE" = firewall ]; then say "移除自启动：firewall.ShellWoL、$ROOT/boot.sh、$ROOT/service/shell-wol.procd"; fi
     say "删除程序：$ROOT/bin/shell-wol"
     say "删除旧程序：$ROOT/backup/shell-wol.previous"
+    if [ -n "$MENU_SHA" ]; then say "删除终端菜单：$ROOT/menu.sh；清理本安装的 swol 别名"; fi
     if [ "$PURGE" = 1 ]; then
         say '清除以下数据文件（存在时）：'
         for name in config.yaml devices.yaml events.yaml credentials.yaml credentials.key service.log service.err.log; do say "  $DATA/$name"; done
@@ -358,17 +369,28 @@ main() {
         fi
         service_reload || fail '服务文件已移除，但重新加载失败；程序和数据保留，可重试'
     fi
+    entry=$(printf "alias swol='sh \"%s/menu.sh\"' # Shell-WoL" "$ROOT")
+    if [ -n "$MENU_PROFILE" ] && [ -f "$MENU_PROFILE" ] && grep -Fqx "$entry" "$MENU_PROFILE"; then
+        before=$(checksum "$MENU_PROFILE")
+        STATE_TMP=$(mktemp "$MENU_PROFILE.shell-wol.XXXXXX")
+        cp -p "$MENU_PROFILE" "$STATE_TMP"
+        awk -v entry="$entry" '$0!=entry' "$MENU_PROFILE" >"$STATE_TMP"
+        [ "$(checksum "$MENU_PROFILE")" = "$before" ] || fail 'profile 在清理期间发生变化'
+        mv -f "$STATE_TMP" "$MENU_PROFILE"; STATE_TMP=
+    fi
     # Record the detached service before deleting programs, making retries safe.
     previous=$(state_value last_version)
     if [ -z "$previous" ]; then previous=$(state_value version); fi
     STATE_TMP=$(mktemp "$ROOT/.uninstall-state.XXXXXX")
     printf 'schema=1\nversion=uninstalled\nservice=none\nservice_sha256=\nstatus=uninstalled\nlast_version=%s\n' "$previous" >"$STATE_TMP"
+    printf 'menu_profile=%s\nmenu_sha256=%s\n' "$MENU_PROFILE" "$MENU_SHA" >>"$STATE_TMP"
     chmod 600 "$STATE_TMP"; mv -f "$STATE_TMP" "$STATE"; STATE_TMP=
     if [ "$BOOT_MODE" = firewall ]; then
         rm -f "$ROOT/boot.sh" "$ROOT/service/shell-wol.procd" "$ROOT/.autostart-disabled"
         rmdir "$ROOT/service" 2>/dev/null || :
     fi
     rm -f "$ROOT/bin/shell-wol" "$ROOT/backup/shell-wol.previous"
+    if [ -n "$MENU_SHA" ]; then rm -f "$ROOT/menu.sh"; fi
     if [ "$PURGE" = 1 ]; then
         for name in config.yaml devices.yaml events.yaml credentials.yaml credentials.key service.log service.err.log; do rm -f "$DATA/$name"; done
         rm -f "$STATE"

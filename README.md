@@ -11,6 +11,7 @@
 - Web 设置、设备 YAML 导出、最多 1000 条操作记录（默认 100 条）。
 - YAML 注释及未知扩展字段尽量保留；保存时统一排版。
 - macOS、Windows、Linux，以及面向 OpenWrt 和兼容二次开发固件的交叉编译脚本与 procd 部署示例。
+- 简单的 Shell 终端菜单：显示状态、PID、内存，支持启动、重启和停止后台服务。
 
 ## 平台范围
 
@@ -35,6 +36,8 @@ sh install.sh --user --yes
 ```
 
 安装器支持版本固定、SHA256 校验、保留数据升级和可选后台服务，不自动开放局域网访问。首次注册服务会直接启动；尚未设置管理员密码时，通过浏览器输入服务日志中的初始化令牌完成设置。
+
+安装后重新登录，输入 `swol` 打开菜单，或使用 `swol status`、`swol start`、`swol restart`、`swol stop`。结构参考 ShellClash，仅增加一个 `menu.sh`，直接调用已有系统服务。系统安装使用原安装账户；完整路径、菜单更新和卸载见 [终端菜单说明](docs/terminal-menu.md)。
 
 GitHub 无法访问时，也可以从 CDN 获取安装入口并使用同一 CDN 安装。地址可切换为 ShellCrash 使用的 `testingcf.jsdelivr.net`：
 

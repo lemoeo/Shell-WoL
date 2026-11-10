@@ -25,8 +25,11 @@ sh install.sh
 | 最新正式版本信息 | Release 的 `latest/download/VERSION` | 资产分支 `@assets/VERSION` |
 | 二进制及其 SHA256SUMS | Release 的 `download/<版本>/` | 固定资产标签 `@assets-<版本>/` |
 | 服务模板及其 SHA256SUMS | 源码 `<版本>/deploy/` | 源码 `@<版本>/deploy/` |
+| 终端菜单及其校验清单 | 源码 `main/scripts/menu.sh`、`main/deploy/SHA256SUMS` | 对应 `@main` 文件 |
 
 首次解析 latest 后，二进制与模板全部固定到同一版本，不会改用 main 或旧版模板。仅访问所选源，下载或校验失败直接停止；需要换源时重新执行并指定 `--source`。
+
+终端菜单单独从 main 下载并校验，安装为根目录的 `menu.sh`，通过 profile 别名 `swol` 进入。菜单更新跟随仓库，不需要新 Go Release 或额外标签；完整命令及权限说明见 [终端菜单](terminal-menu.md)。
 
 旧 Release 已上传的脚本和模板无需删除。**旧标签如果没有 `deploy/SHA256SUMS`，新安装器无法为该版本自动安装服务**；可使用原配套安装方式，或不加 `--service` 只安装程序并手动运行。已有受管理服务的升级会保留服务类型，因此也需要选择包含模板清单的新标签。不要移动旧标签来补文件；应提交文件并发布新版本。
 
@@ -92,6 +95,7 @@ CDN 的分支文件可能有缓存延迟；只用 `@assets/VERSION` 解析一次
 ├── bin/shell-wol
 ├── data/                 YAML 数据及凭据密钥；初始化后默认私有权限
 ├── backup/shell-wol.previous
+├── menu.sh              简单交互菜单及服务启停
 ├── boot.sh              仅 firewall 启动模式，由安装器生成
 ├── service/shell-wol.procd  仅 firewall 模式，服务文件的持久副本
 └── .shell-wol-install    安装器版本、服务、启动模式及文件摘要
@@ -242,6 +246,7 @@ sudo sh uninstall.sh --install-dir /opt/shell-wol --purge
 | 内容 | 默认 | `--purge` |
 | --- | --- | --- |
 | 受管理的服务文件及开机启动 | 移除 | 移除 |
+| `menu.sh` 和本安装的 `swol` 别名 | 移除 | 移除 |
 | 本安装的 firewall include、`boot.sh`、持久 procd 副本及禁用标记 | 移除 | 移除 |
 | `bin/shell-wol`、`backup/shell-wol.previous` | 删除 | 删除 |
 | `data/config.yaml`、`devices.yaml`、`events.yaml` | 保留 | 删除 |
@@ -302,6 +307,8 @@ sh scripts/template-checksums.sh --check
 ```
 
 将模板与 `deploy/SHA256SUMS` 一起提交，再创建版本标签。Tests、Release 工作流和构建脚本都会检查该清单；摘要过期会导致检查失败。不要在 Release 工作流中自动覆盖仓库清单来绕过检查。
+
+该清单还包含 `scripts/menu.sh` 的摘要；菜单修改后运行同一个 `template-checksums.sh` 更新即可。菜单本身从 main 安装，不需要为菜单修改创建程序版本标签。
 
 ## Mac VNC 凭据
 

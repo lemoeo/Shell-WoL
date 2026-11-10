@@ -10,8 +10,10 @@ trap 'exit 130' INT
 trap 'exit 143' HUP TERM
 if command -v sha256sum >/dev/null 2>&1; then
     sha256sum shell-wol.service shell-wol.openwrt shell-wol.plist >"$tmp"
+    (cd ../scripts; sha256sum menu.sh) >>"$tmp"
 elif command -v shasum >/dev/null 2>&1; then
     shasum -a 256 shell-wol.service shell-wol.openwrt shell-wol.plist >"$tmp"
+    (cd ../scripts; shasum -a 256 menu.sh) >>"$tmp"
 else
     echo '需要 sha256sum 或 shasum' >&2
     exit 1

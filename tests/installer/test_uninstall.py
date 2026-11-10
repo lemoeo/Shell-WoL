@@ -63,7 +63,10 @@ class UninstallTests(unittest.TestCase):
         return r
     def state(self,service,unit=None):
         digest=hashlib.sha256(unit.read_bytes()).hexdigest() if unit else ''
-        (self.root/'.shell-wol-install').write_text(f'schema=1\nversion=v1.2.3\nservice={service}\nservice_sha256={digest}\n')
+        state=self.root/'.shell-wol-install'
+        fields=dict(line.split('=',1) for line in state.read_text().splitlines())
+        fields.update(service=service,service_sha256=digest)
+        state.write_text(''.join(k+'='+v+'\n' for k,v in fields.items()))
     def test_default_keeps_data_and_reinstall(self):
         self.install(service=True)
         data=self.root/'data';(data/'devices.yaml').write_text('devices: []\n# preserve\n')
@@ -86,6 +89,16 @@ class UninstallTests(unittest.TestCase):
         (self.root/'backup').mkdir(exist_ok=True);(self.root/'backup/shell-wol.previous').write_text('old')
         self.uninstall('--purge');self.assertFalse(self.root.exists())
         self.uninstall('--purge')
+    def test_menu_and_only_owned_alias_are_removed(self):
+        self.install()
+        profile=self.fixture.home/'.profile'
+        profile.write_text('# user settings\n'+profile.read_text()+'alias other="echo kept"\n')
+        self.uninstall()
+        self.assertFalse((self.root/'menu.sh').exists())
+        self.assertEqual(profile.read_text(),'# user settings\nalias other="echo kept"\n')
+        before=profile.read_bytes()
+        self.uninstall()
+        self.assertEqual(profile.read_bytes(),before)
     def test_purge_preserves_unknown_files_and_empty_folders(self):
         self.install();(self.root/'notes.txt').write_text('user file')
         (self.root/'data/custom.yaml').write_text('custom: yes')

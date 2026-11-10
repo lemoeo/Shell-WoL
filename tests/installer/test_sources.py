@@ -29,7 +29,8 @@ class SourceTests(unittest.TestCase):
         self.assertTrue(any('@assets/VERSION' in u for u in requests))
         self.assertTrue(any('@assets-v1.2.3/shell-wol-linux-amd64' in u for u in requests))
         self.assertTrue(any('@v1.2.3/deploy/shell-wol.service' in u for u in requests))
-        self.assertFalse(any('/releases/' in u or '@main' in u or '@latest' in u for u in requests))
+        self.assertTrue(any('@main/scripts/menu.sh' in u for u in requests))
+        self.assertFalse(any('/releases/' in u or '@main/deploy/shell-wol.' in u or '@latest' in u for u in requests))
 
     def test_testingcf_environment_default_with_cli_override(self):
         self.f.env['SHELL_WOL_CDN_BASE'] = 'https://testingcf.jsdelivr.net'

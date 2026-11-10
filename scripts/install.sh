@@ -11,6 +11,12 @@ CDN_BASE=${SHELL_WOL_CDN_BASE:-https://cdn.jsdelivr.net}
 CUSTOM_DOWNLOAD=0
 CUSTOM_REPO=0
 VERSION=latest
+MENU_CHANGED=0
+PROFILE_CHANGED=0
+OLD_MENU=0
+OLD_PROFILE=0
+MENU_PROFILE=
+MENU_ENTRY_TMP=
 ARCH=
 INSTALL_DIR=
 USER_MODE=0
@@ -154,16 +160,22 @@ resource_url() {
         binary:jsdelivr) printf '%s/gh/%s@assets-%s/%s\n' "$CDN_BASE" "$REPO" "$VERSION" "$3" ;;
         template:github) printf '%s/%s/deploy/%s\n' "$REPO_BASE" "$VERSION" "$3" ;;
         template:jsdelivr) printf '%s/gh/%s@%s/deploy/%s\n' "$CDN_BASE" "$REPO" "$VERSION" "$3" ;;
+        menu:github)
+            if [ "$3" = SHA256SUMS ]; then printf '%s/main/deploy/SHA256SUMS\n' "$REPO_BASE"
+            else printf '%s/main/scripts/menu.sh\n' "$REPO_BASE"; fi ;;
+        menu:jsdelivr)
+            if [ "$3" = SHA256SUMS ]; then printf '%s/gh/%s@main/deploy/SHA256SUMS\n' "$CDN_BASE" "$REPO"
+            else printf '%s/gh/%s@main/scripts/menu.sh\n' "$CDN_BASE" "$REPO"; fi ;;
         *) return 1 ;;
     esac
 }
 fetch_resource() {
     resource_kind=$1; resource_name=$2; resource_out=$3
-    case "$resource_kind:$resource_name" in latest:*) resource_timeout=10 ;; template:*|binary:SHA256SUMS) resource_timeout=20 ;; *) resource_timeout=180 ;; esac
+    case "$resource_kind:$resource_name" in latest:*) resource_timeout=10 ;; template:*|menu:*|binary:SHA256SUMS) resource_timeout=20 ;; *) resource_timeout=180 ;; esac
     resource_custom=0
     case "$resource_kind" in
         latest|binary) resource_custom=$CUSTOM_DOWNLOAD ;;
-        template) resource_custom=$CUSTOM_REPO ;;
+        template|menu) resource_custom=$CUSTOM_REPO ;;
     esac
     resource_source=$SOURCE
     if [ "$resource_custom" = 1 ]; then resource_source=github; fi
@@ -387,6 +399,13 @@ run() {
     lock
     allowed || return 0
     require_sha256 || die '没有可用的 SHA256 校验工具，持久自启动已停止'
+    # Restore the shortcut when snapshot firmware rebuilds /etc/profile.
+    if [ "$(state_value menu_profile)" = /etc/profile ] && [ -w /etc/profile ] && [ ! -L /etc/profile ] &&
+        [ -f "$ROOT/menu.sh" ] && [ ! -L "$ROOT/menu.sh" ] &&
+        [ "$(checksum "$ROOT/menu.sh")" = "$(state_value menu_sha256)" ]; then
+        entry=$(printf "alias swol='sh \"%s/menu.sh\"' # Shell-WoL" "$ROOT")
+        if ! grep -Eq '^[[:space:]]*alias[[:space:]]+swol=' /etc/profile; then printf '%s\n' "$entry" >>/etc/profile; fi
+    fi
     deadline=$(($(date +%s) + 60))
     while ! { [ -x "$ROOT/bin/shell-wol" ] && [ -f "$ROOT/data/config.yaml" ] &&
         [ -f "$ROOT/data/devices.yaml" ] && ubus -t 2 list service >/dev/null 2>&1; }; do
@@ -497,6 +516,14 @@ service_start() {
 }
 rollback() {
     say '安装失败，正在恢复旧程序和服务……' >&2
+    if [ "$PROFILE_CHANGED" = 1 ]; then
+        if [ "$OLD_PROFILE" = 1 ]; then cp -p "$TMP/old-menu-profile" "$MENU_PROFILE"
+        else rm -f "$MENU_PROFILE"; fi
+    fi
+    if [ "$MENU_CHANGED" = 1 ]; then
+        if [ "$OLD_MENU" = 1 ]; then cp -p "$TMP/old-menu" "$ROOT/menu.sh"
+        else rm -f "$ROOT/menu.sh"; fi
+    fi
     if [ "$SERVICE_CHANGED" = 1 ]; then
         service_stop >/dev/null 2>&1 || :
         service_disable >/dev/null 2>&1 || :
@@ -536,10 +563,53 @@ cleanup() {
     trap - 0 HUP INT TERM
     if [ "$TRANSACTION" = 1 ] && [ "$COMMITTED" = 0 ]; then rollback || :; fi
     if [ -n "$BOOT_NEW" ]; then rm -f "$BOOT_NEW"; fi
+    if [ -n "$MENU_ENTRY_TMP" ]; then rm -f "$MENU_ENTRY_TMP"; fi
     if [ "$OWN_BOOT_LOCK" = 1 ]; then rmdir "$BOOT_LOCK" 2>/dev/null || :; fi
     if [ -n "$INSTALL_LOCK" ]; then rmdir "$INSTALL_LOCK" 2>/dev/null || :; fi
     if [ -n "$TMP" ]; then rm -rf "$TMP"; fi
     exit "$result"
+}
+menu_profile_path() {
+    if [ "$USER_MODE" = 0 ] && [ "$OS" != darwin ] && [ -w /etc/profile ]; then printf '/etc/profile\n'
+    else
+        menu_home=$(CDPATH= cd "$HOME" && pwd -P) || return 1
+        case "${SHELL:-}" in
+            */zsh) printf '%s/.zshrc\n' "$menu_home" ;;
+            */bash) if [ "$OS" = darwin ]; then printf '%s/.bash_profile\n' "$menu_home"; else printf '%s/.bashrc\n' "$menu_home"; fi ;;
+            *) printf '%s/.profile\n' "$menu_home" ;;
+        esac
+    fi
+}
+check_menu_paths() {
+    [ ! -L "$ROOT/menu.sh" ] || fail 'menu.sh 不能是符号链接'
+    if [ -e "$ROOT/menu.sh" ]; then
+        [ -f "$ROOT/menu.sh" ] && [ "$(checksum "$ROOT/menu.sh")" = "$(state_value menu_sha256)" ] || fail 'menu.sh 无安装记录或已被修改'
+    fi
+    validate_dir "$MENU_PROFILE"
+    parent=$MENU_PROFILE
+    while [ "$parent" != / ]; do [ ! -L "$parent" ] || fail '菜单 profile 路径含符号链接'; parent=$(dirname "$parent"); done
+    [ -w "$(dirname "$MENU_PROFILE")" ] || fail "无法写入菜单快捷入口：$MENU_PROFILE"
+    if [ -e "$MENU_PROFILE" ]; then
+        [ -f "$MENU_PROFILE" ] && [ -w "$MENU_PROFILE" ] || fail '菜单 profile 不是可写普通文件'
+        if grep -E '^[[:space:]]*alias[[:space:]]+swol=' "$MENU_PROFILE" | grep -Fvx "$MENU_ALIAS" >/dev/null; then fail 'profile 已有其他 swol 别名'; fi
+    fi
+}
+install_menu() {
+    check_menu_paths
+    if [ -f "$ROOT/menu.sh" ]; then cp -p "$ROOT/menu.sh" "$TMP/old-menu"; OLD_MENU=1; fi
+    if [ -f "$MENU_PROFILE" ]; then cp -p "$MENU_PROFILE" "$TMP/old-menu-profile"; OLD_PROFILE=1; fi
+    MENU_CHANGED=1
+    cp "$TMP/menu.sh" "$ROOT/menu.sh"; chmod 755 "$ROOT/menu.sh"
+    MENU_ENTRY_TMP=$(mktemp "$MENU_PROFILE.shell-wol.XXXXXX")
+    if [ "$OLD_PROFILE" = 1 ]; then
+        cp -p "$MENU_PROFILE" "$MENU_ENTRY_TMP"
+        awk -v entry="$MENU_ALIAS" '$0!=entry' "$MENU_PROFILE" >"$MENU_ENTRY_TMP"
+    else chmod 644 "$MENU_ENTRY_TMP"; fi
+    printf '%s\n' "$MENU_ALIAS" >>"$MENU_ENTRY_TMP"
+    if [ "$OLD_PROFILE" = 1 ]; then cmp -s "$MENU_PROFILE" "$TMP/old-menu-profile" || fail 'profile 在注册期间发生变化'
+    else [ ! -e "$MENU_PROFILE" ] || fail 'profile 在注册期间被创建'; fi
+    PROFILE_CHANGED=1
+    mv -f "$MENU_ENTRY_TMP" "$MENU_PROFILE"; MENU_ENTRY_TMP=
 }
 render_service() {
     case "$SERVICE" in
@@ -672,6 +742,10 @@ main() {
         case "$prior_service" in none) ;; systemd|procd|launchd-user|launchd-system) WANT_SERVICE=1 ;; *) fail '无效的安装状态文件' ;; esac
         if [ "$PRIOR_BOOT_MODE" = firewall ]; then [ "$prior_service" = procd ] || fail '持久启动元数据的服务类型无效'; fi
     else prior_service=none; fi
+    if [ -f "$ROOT/.shell-wol-install" ]; then MENU_PROFILE=$(state_value menu_profile); fi
+    [ -n "$MENU_PROFILE" ] || MENU_PROFILE=$(menu_profile_path)
+    MENU_ALIAS=$(printf "alias swol='sh \"%s/menu.sh\"' # Shell-WoL" "$ROOT")
+    check_menu_paths
     if [ "$WANT_SERVICE" = 1 ]; then
         choose_service
         choose_boot_mode
@@ -713,6 +787,11 @@ main() {
         fetch_resource template "$template" "$TMP/$template" || fail "无法获取 $VERSION 标签的服务模板，不会回退到 main"
         verify_asset "$template" "$TMP/template-SHA256SUMS"
     fi
+    # Like ShellClash, the small menu follows repository updates, independently
+    # of the Go binary. Check its digest once before installing it.
+    fetch_resource menu SHA256SUMS "$TMP/menu-SHA256SUMS" || fail '无法下载菜单校验清单'
+    fetch_resource menu menu.sh "$TMP/menu.sh" || fail '无法下载终端菜单'
+    verify_asset menu.sh "$TMP/menu-SHA256SUMS"
     existing=$ROOT
     while [ ! -d "$existing" ]; do existing=$(dirname "$existing"); done
     [ -w "$existing" ] || fail "目录不可写：$existing"
@@ -800,9 +879,11 @@ main() {
             say '后台服务已启动；Web 接口就绪检查通过。'
         else say '保留旧服务的停止状态。'; fi
     fi
+    install_menu
     {
         schema=1; [ "$BOOT_MODE" != firewall ] || schema=2
         printf 'schema=%s\nversion=%s\nservice=%s\nservice_sha256=%s\nboot_mode=%s\n' "$schema" "$VERSION" "$SERVICE" "$service_hash" "$BOOT_MODE"
+        printf 'menu_profile=%s\nmenu_sha256=%s\n' "$MENU_PROFILE" "$(checksum "$ROOT/menu.sh")"
         if [ "$BOOT_MODE" = firewall ]; then printf 'boot_script=%s/boot.sh\nuci_section=ShellWoL\nboot_sha256=%s\n' "$ROOT" "$(checksum "$ROOT/boot.sh")"; fi
     } >"$ROOT/.shell-wol-install.new"
     chmod 600 "$ROOT/.shell-wol-install.new"; mv -f "$ROOT/.shell-wol-install.new" "$ROOT/.shell-wol-install"
@@ -815,6 +896,8 @@ main() {
     COMMITTED=1
     say "安装完成：$BIN/shell-wol"
     say "数据目录：$DATA"
+    say "终端菜单：swol；重新登录或执行 . \"$MENU_PROFILE\" 后生效。"
+    say "完整入口：sh \"$ROOT/menu.sh\"（系统安装以 root 运行）。"
     if [ -n "$SERVICE_USER" ] && [ "$USER_MODE" = 0 ]; then
         say "手动运行（先停止后台服务）：sudo -u \"$SERVICE_USER\" \"$BIN/shell-wol\" serve --data-dir \"$DATA\""
     else say "手动运行：\"$BIN/shell-wol\" serve --data-dir \"$DATA\""; fi
