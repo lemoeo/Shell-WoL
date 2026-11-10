@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -34,6 +35,8 @@ func run(args []string) error {
   init        创建 YAML 数据；--password-stdin 从标准输入设置管理员密码
   wake        --device ID 或 --mac MAC [--broadcast IPv4 --port 9 --repeat 3 --interface 名称]
   check       只读校验 YAML；--require-password 检查密码；--running 检查服务接口
+  token       查看当前服务的初始化令牌（仅本地账户）
+  lock        检查数据锁；POSIX 维护可使用 lock --data-dir PATH -- 命令 参数
   interfaces  列出 IPv4 网卡与广播地址
   version     查看版本
 所有数据命令支持 --data-dir PATH（默认 ./data）；serve 支持 --listen HOST:PORT。
@@ -52,7 +55,7 @@ func run(args []string) error {
 		return json.NewEncoder(os.Stdout).Encode(n)
 	}
 	command := args[0]
-	if command != "init" && command != "serve" && command != "wake" && command != "check" {
+	if command != "init" && command != "serve" && command != "wake" && command != "check" && command != "token" && command != "lock" {
 		return fmt.Errorf("未知命令 %q，使用 --help 查看帮助", command)
 	}
 	f := flag.NewFlagSet(command, flag.ContinueOnError)
@@ -60,6 +63,7 @@ func run(args []string) error {
 	var listen, device, mac, broadcast, iface *string
 	var port, repeat *int
 	var password, requirePassword, running *bool
+	var logLimit *int
 	switch command {
 	case "check":
 		requirePassword = f.Bool("require-password", false, "要求管理员已初始化")
@@ -68,6 +72,7 @@ func run(args []string) error {
 		listen = f.String("listen", "", "覆盖监听地址")
 	case "init":
 		password = f.Bool("password-stdin", false, "从标准输入读取管理员密码")
+		logLimit = f.Int("log-limit", -1, "初始化操作记录数量；-1 保留当前值")
 	case "wake":
 		device = f.String("device", "", "已保存设备 ID")
 		mac = f.String("mac", "", "目标 MAC")
@@ -84,8 +89,32 @@ func run(args []string) error {
 	}
 	provided := map[string]bool{}
 	f.Visit(func(v *flag.Flag) { provided[v.Name] = true })
-	if f.NArg() != 0 {
+	if f.NArg() != 0 && command != "lock" {
 		return errors.New("不支持额外的位置参数")
+	}
+	if command == "lock" {
+		lock, err := app.AcquireDataLock(*dir)
+		if err != nil {
+			return err
+		}
+		defer lock.Close()
+		if f.NArg() != 0 {
+			return lock.Run(f.Args())
+		}
+		fmt.Println("数据锁可用")
+		return nil
+	}
+	if command == "token" {
+		token, err := app.ReadSetupToken(*dir)
+		if errors.Is(err, app.ErrAdminInitialized) {
+			fmt.Println(app.ErrAdminInitialized)
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		fmt.Println(token)
+		return nil
 	}
 	if command == "check" {
 		if err := app.CheckData(*dir, *requirePassword, *running); err != nil {
@@ -148,6 +177,13 @@ func run(args []string) error {
 	defer store.Close()
 	switch command {
 	case "init":
+		if *logLimit != -1 {
+			c := store.Config()
+			c.LogLimit = *logLimit
+			if e = store.SaveConfig(c); e != nil {
+				return e
+			}
+		}
 		if *password {
 			b, e := io.ReadAll(io.LimitReader(os.Stdin, 1025))
 			if e != nil {
@@ -171,8 +207,16 @@ func run(args []string) error {
 		if e = app.ValidateListen(addr); e != nil {
 			return e
 		}
+		listener, e := net.Listen("tcp", addr)
+		if e != nil {
+			return e
+		}
+		defer listener.Close()
 		server := app.NewServer(store)
 		defer server.Close()
+		if e = store.PublishSetupToken(server.SetupToken()); e != nil {
+			return fmt.Errorf("保存初始化令牌: %w", e)
+		}
 		if c.PasswordHash == "" {
 			fmt.Println("首次启动：请打开管理界面，使用以下初始化令牌设置密码（本次启动有效）：")
 			fmt.Println(server.SetupToken())
@@ -181,7 +225,7 @@ func run(args []string) error {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		done := make(chan error, 1)
-		go func() { done <- httpServer.ListenAndServe() }()
+		go func() { done <- httpServer.Serve(listener) }()
 		slog.Info("Web 管理服务启动", "listen", addr)
 		select {
 		case e = <-done:

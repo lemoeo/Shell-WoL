@@ -56,6 +56,35 @@ try:
                 text=True,capture_output=True)
             assert result.returncode==1,result.stdout+result.stderr
             token = re.search(r'^[0-9a-f]{64}$', log.read_text(), re.M).group()
+            current=subprocess.check_output([str(installed),'token','--data-dir',str(data)],text=True).strip()
+            assert current==token
+            assert (data/'.setup-token').stat().st_mode & 0o777 == 0o600
+            # SIGKILL must release the kernel lock even though files remain.
+            process.kill();process.wait(timeout=10)
+            assert (data/'.lock').is_file() and (data/'.setup-token').exists()
+            stale=subprocess.run([str(installed),'token','--data-dir',str(data)],text=True,capture_output=True)
+            assert stale.returncode!=0 and token not in stale.stdout+stale.stderr
+            process=subprocess.Popen([str(installed),'serve','--data-dir',str(data)],stdout=stdout,stderr=subprocess.DEVNULL)
+            for _ in range(100):
+                result=subprocess.run([str(installed),'check','--data-dir',str(data),'--running'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+                if result.returncode==0:break
+                time.sleep(.05)
+            else:raise RuntimeError('service did not recover after SIGKILL')
+            fresh=subprocess.check_output([str(installed),'token','--data-dir',str(data)],text=True).strip()
+            assert fresh!=token
+            token=fresh
+            menu_token=subprocess.run(['sh',str(menu),'token'],env=fixture.env,text=True,capture_output=True)
+            assert menu_token.returncode==0 and menu_token.stdout.strip()==token
+            duplicate=subprocess.run([str(installed),'init','--data-dir',str(data)],capture_output=True,text=True)
+            assert duplicate.returncode!=0
+            bind_data=fixture.base/'bind-failure'
+            subprocess.run([str(installed),'init','--data-dir',str(bind_data)],check=True,stdout=subprocess.DEVNULL)
+            bind_config=bind_data/'config.yaml'
+            bind_config.write_text(bind_config.read_text().replace('127.0.0.1:8080',f'0.0.0.0:{port}'))
+            failed=subprocess.run([str(installed),'serve','--data-dir',str(bind_data)],text=True,capture_output=True)
+            assert failed.returncode!=0 and not (bind_data/'.setup-token').exists()
+            subprocess.run([str(installed),'lock','--data-dir',str(bind_data)],check=True,stdout=subprocess.DEVNULL)
+
             base = f'http://127.0.0.1:{port}'
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
             with opener.open(base + '/api/session') as response:
@@ -69,6 +98,8 @@ try:
                 assert response.status == 200
             subprocess.run([str(installed), 'check', '--data-dir', str(data), '--require-password', '--running'],
                            check=True, stdout=subprocess.DEVNULL)
+            assert not (data/'.setup-token').exists()
+            assert '管理员已初始化' in subprocess.check_output([str(installed),'token','--data-dir',str(data)],text=True)
             fixture.run_install(success=False)  # Manual process owns the data lock.
             blocked = subprocess.run(['sh', str(Path(__file__).resolve().parents[2] / 'scripts/uninstall.sh'),
                                       '--user', '--install-dir', str(fixture.root), '--yes', '--purge'],
@@ -124,7 +155,8 @@ main "$3"
     assert config.read_bytes() == before
     assert (fixture.root / 'backup/shell-wol.previous').exists()
     assert not (fixture.root / '.install-lock').exists()
-    assert not (data / '.lock').exists()
+    assert (data / '.lock').is_file()
+    subprocess.run([str(installed),'lock','--data-dir',str(data)],check=True,stdout=subprocess.DEVNULL)
     uninstall = ['sh', str(Path(__file__).resolve().parents[2] / 'scripts/uninstall.sh'),
                  '--user', '--install-dir', str(fixture.root), '--yes']
     subprocess.run(uninstall, check=True, stdout=subprocess.DEVNULL)
@@ -133,6 +165,25 @@ main "$3"
     assert installed.exists() and config.read_bytes() == before
     subprocess.run(uninstall + ['--purge'], check=True, stdout=subprocess.DEVNULL)
     assert not fixture.root.exists()
-    print('PASS: native install, LAN setup, PID/RSS, menu service lifecycle, runtime lock, upgrade, uninstall/reinstall, purge')
+    # A failed upgrade from the legacy directory-lock binary must restore a
+    # layout that the old binary can still open.
+    fixture.make_release('v0.0.1-test')
+    fixture.run_install()
+    before={n:(fixture.root/n).read_bytes() for n in ('bin/shell-wol','.shell-wol-install','data/config.yaml')}
+    fixture.make_release(version)
+    shutil.copyfile(binary,fixture.assets/'shell-wol-linux-amd64');fixture.manifest()
+    fixture.tool('mv',r'''#!/bin/sh
+for arg in "$@"; do
+ case "$arg" in */.shell-wol-install)
+  if [ ! -e "$FIXTURE_ROOT/state-failed" ]; then touch "$FIXTURE_ROOT/state-failed";exit 1;fi;;
+ esac
+done
+exec /bin/mv "$@"
+''')
+    fixture.run_install(success=False)
+    for n,content in before.items():assert (fixture.root/n).read_bytes()==content,n
+    assert not (fixture.root/'data/.lock').exists()
+    subprocess.run(uninstall+['--purge'],env=fixture.env,check=True,stdout=subprocess.DEVNULL)
+    print('PASS: kernel lock/SIGKILL recovery, private token lifecycle, menu, bind failure, upgrade rollback and uninstall/reinstall/purge')
 finally:
     fixture.tearDown()

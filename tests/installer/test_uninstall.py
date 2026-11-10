@@ -56,7 +56,7 @@ class UninstallTests(unittest.TestCase):
     def uninstall(self,*args,success=True):
         # Redirect only service paths/privilege checks; real manager commands are
         # fixture executables. Production code has no service-path override flag.
-        prefix='. "$1"; shift; resolve_service() { SERVICE_FILE=; LAUNCH_DOMAIN=; if [ "$SERVICE" != none ]; then SERVICE_FILE="$FIXTURE_SERVICE/shell-wol.service"; LAUNCH_DOMAIN=gui/fixture; fi; }; require_service_permissions() { :; }; '
+        prefix='. "$1"; UNINSTALL_SOURCE=$1; shift; resolve_service() { SERVICE_FILE=; LAUNCH_DOMAIN=; if [ "$SERVICE" != none ]; then SERVICE_FILE="$FIXTURE_SERVICE/shell-wol.service"; LAUNCH_DOMAIN=gui/fixture; fi; }; require_service_permissions() { :; }; '
         r=subprocess.run(['sh','-c',prefix+'main "$@"','uninstall',str(UNINSTALLER),'--user','--install-dir',str(self.root),'--yes',*args],env=self.env,text=True,capture_output=True)
         if success:self.assertEqual(r.returncode,0,r.stdout+r.stderr)
         else:self.assertNotEqual(r.returncode,0,r.stdout+r.stderr)

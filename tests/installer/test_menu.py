@@ -107,6 +107,7 @@ exec /bin/mv "$@"
         with (self.root/'.shell-wol-install').open('a') as f:f.write('other=$(touch '+str(marker)+')\n')
         self.menu('status',code=1);self.assertFalse(marker.exists())
         self.menu('start',code=1)
+        self.assertIn('升级',self.menu('token',code=1).stderr)
         self.menu('invalid',code=2)
 
     def test_menu_requires_terminal_and_opens_in_pty(self):

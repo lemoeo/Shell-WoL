@@ -15,6 +15,7 @@ BOOT_LOCK=/tmp/shell-wol-boot.lock
 OWN_BOOT_LOCK=0
 MENU_PROFILE=
 MENU_SHA=
+UNINSTALL_SOURCE=$(CDPATH= cd "$(dirname "$0")" && pwd -P)/$(basename "$0")
 
 say() { printf '%s\n' "$*"; }
 fail() { say "错误：$*" >&2; exit 1; }
@@ -220,6 +221,7 @@ check_paths() {
     check_file "$STATE"
     check_file "$ROOT/bin/shell-wol"
     check_file "$ROOT/backup/shell-wol.previous"
+    check_file "$DATA/.setup-token"
     if [ -n "$MENU_SHA" ]; then check_file "$ROOT/menu.sh"; fi
     if [ -n "$MENU_PROFILE" ]; then
         validate_dir "$MENU_PROFILE"
@@ -256,6 +258,62 @@ cleanup() {
     if [ -n "$INSTALL_LOCK" ]; then rmdir "$INSTALL_LOCK" 2>/dev/null || :; fi
     if [ -n "${ROOT:-}" ]; then rmdir "$ROOT" 2>/dev/null || :; fi
     exit "$code"
+}
+finish_uninstall() {
+    ROOT=$1; DATA=$ROOT/data; STATE=$ROOT/.shell-wol-install
+    PURGE=$2; BOOT_MODE=$3; MENU_PROFILE=$4; MENU_SHA=$5
+    SERVICE=$6; SERVICE_FILE=$7; LAUNCH_DOMAIN=$8; LOCK_MODE=$9
+    if processes_stopped; then :; else code=$?; [ "$code" != 1 ] || fail '检测到本安装的手动运行进程，先停止该进程；不会自动杀进程'; fail '无法检查进程状态，停止卸载'; fi
+    check_paths
+    verify_service
+    if [ "$SERVICE" != none ]; then
+        # A missing inactive unit is tolerated when retrying an interrupted removal.
+        if [ -f "$SERVICE_FILE" ]; then
+            service_disable || fail '禁用后台服务失败，程序和数据未删除'
+            rm -f "$SERVICE_FILE"
+        else
+            remove_owned_enable_links
+        fi
+        service_reload || fail '服务文件已移除，但重新加载失败；程序和数据保留，可重试'
+    fi
+    entry=$(printf "alias swol='sh \"%s/menu.sh\"' # Shell-WoL" "$ROOT")
+    if [ -n "$MENU_PROFILE" ] && [ -f "$MENU_PROFILE" ] && grep -Fqx "$entry" "$MENU_PROFILE"; then
+        before=$(checksum "$MENU_PROFILE")
+        STATE_TMP=$(mktemp "$MENU_PROFILE.shell-wol.XXXXXX")
+        cp -p "$MENU_PROFILE" "$STATE_TMP"
+        awk -v entry="$entry" '$0!=entry' "$MENU_PROFILE" >"$STATE_TMP"
+        [ "$(checksum "$MENU_PROFILE")" = "$before" ] || fail 'profile 在清理期间发生变化'
+        mv -f "$STATE_TMP" "$MENU_PROFILE"; STATE_TMP=
+    fi
+    # Record the detached service before deleting programs, making retries safe.
+    previous=$(state_value last_version)
+    if [ -z "$previous" ]; then previous=$(state_value version); fi
+    STATE_TMP=$(mktemp "$ROOT/.uninstall-state.XXXXXX")
+    printf 'schema=1\nversion=uninstalled\nservice=none\nservice_sha256=\nstatus=uninstalled\nlast_version=%s\n' "$previous" >"$STATE_TMP"
+    printf 'menu_profile=%s\nmenu_sha256=%s\n' "$MENU_PROFILE" "$MENU_SHA" >>"$STATE_TMP"
+    chmod 600 "$STATE_TMP"; mv -f "$STATE_TMP" "$STATE"; STATE_TMP=
+    if [ "$BOOT_MODE" = firewall ]; then
+        rm -f "$ROOT/boot.sh" "$ROOT/service/shell-wol.procd" "$ROOT/.autostart-disabled"
+        rmdir "$ROOT/service" 2>/dev/null || :
+    fi
+    rm -f "$ROOT/bin/shell-wol" "$ROOT/backup/shell-wol.previous"
+    if [ -n "$MENU_SHA" ]; then rm -f "$ROOT/menu.sh"; fi
+    rm -f "$DATA/.setup-token"
+    if [ "$PURGE" = 1 ]; then
+        for name in config.yaml devices.yaml events.yaml credentials.yaml credentials.key service.log service.err.log; do rm -f "$DATA/$name"; done
+        rm -f "$STATE"
+    fi
+    if [ "$LOCK_MODE" = system ]; then
+        # Last data-file mutation: never unlink a live service's lock. Waiters
+        # validate the inode after acquisition before touching any YAML.
+        rm -f "$DATA/.lock"
+    else rmdir "$DATA/.lock"; OWN_DATA_LOCK=0; fi
+    if [ "$PURGE" = 1 ] || [ "$DATA_CREATED" = 1 ]; then rmdir "$DATA" 2>/dev/null || :; DATA_CREATED=0; fi
+    rmdir "$ROOT/bin" "$ROOT/backup" 2>/dev/null || :
+    say '程序及受管理后台服务已卸载。'
+    if [ "$PURGE" = 0 ]; then say "数据保留于 $DATA；重新安装时指定 --install-dir \"$ROOT\"。"; fi
+    remaining=$(find "$ROOT" ! -path "$ROOT" ! -path "$ROOT/.install-lock" -print) || fail '无法列出剩余文件，请检查目录'
+    if [ -n "$remaining" ]; then say '保留的文件：'; printf '%s\n' "$remaining"; fi
 }
 main() {
     while [ "$#" -gt 0 ]; do
@@ -351,56 +409,37 @@ main() {
         attempts=$((attempts+1)); sleep 1
     done
     attempts=0
-    while [ -e "$DATA/.lock" ] && [ "$active" = 1 ] && [ "$attempts" -lt 10 ]; do attempts=$((attempts+1)); sleep 1; done
-    [ ! -e "$DATA/.lock" ] && [ ! -L "$DATA/.lock" ] || fail '数据运行锁仍存在；需人工确认进程状态，卸载器不会删除它'
+    while [ -d "$DATA/.lock" ] && [ "$active" = 1 ] && [ "$attempts" -lt 10 ]; do attempts=$((attempts+1)); sleep 1; done
+    [ ! -d "$DATA/.lock" ] && [ ! -L "$DATA/.lock" ] || fail '旧版目录锁仍存在；需人工确认进程状态，不会自动删除'
+    # Check before invoking a possibly replaced executable; recheck under the
+    # acquired lock in finish_uninstall to cover a concurrent manual start.
+    attempts=0
+    while ! processes_stopped; do
+        if [ "$active" = 1 ] && [ "$attempts" -lt 10 ]; then attempts=$((attempts+1)); sleep 1
+        else fail '检测到仍在运行的进程或无法读取进程状态；先停止手动进程后重试'; fi
+    done
+    LOCK_BINARY=
+    for candidate in "$ROOT/bin/shell-wol" "$ROOT/backup/shell-wol.previous"; do
+        if [ -x "$candidate" ] && "$candidate" lock --help >/dev/null 2>&1; then LOCK_BINARY=$candidate; break; fi
+    done
+    if [ -n "$LOCK_BINARY" ]; then
+        [ -d "$DATA" ] || DATA_CREATED=1
+        # The Go process execs this synchronous shell phase with a live flock FD.
+        # It no longer appears as a managed Go executable in processes_stopped.
+        SHELL_WOL_UNINSTALL_LIBRARY=1 "$LOCK_BINARY" lock --data-dir "$DATA" -- sh -c '
+            . "$1"; shift
+            trap cleanup 0
+            trap "exit 130" INT
+            trap "exit 143" HUP TERM
+            finish_uninstall "$@"
+        ' uninstall-phase "$UNINSTALL_SOURCE" "$ROOT" "$PURGE" "$BOOT_MODE" "$MENU_PROFILE" "$MENU_SHA" "$SERVICE" "$SERVICE_FILE" "$LAUNCH_DOMAIN" system || fail '文件锁维护阶段失败；请检查以上错误后重试'
+        return
+    fi
+    [ ! -e "$DATA/.lock" ] || fail '存在文件锁，但没有可用的兼容程序；请先恢复二进制'
     if [ ! -d "$DATA" ]; then mkdir "$DATA"; DATA_CREATED=1; fi
     mkdir "$DATA/.lock" 2>/dev/null || fail '数据目录被进程占用'
     OWN_DATA_LOCK=1
-    if processes_stopped; then :; else code=$?; [ "$code" != 1 ] || fail '检测到本安装的手动运行进程，先停止该进程；不会自动杀进程'; fail '无法检查进程状态，停止卸载'; fi
-    check_paths
-    verify_service
-    if [ "$SERVICE" != none ]; then
-        # A missing inactive unit is tolerated when retrying an interrupted removal.
-        if [ -f "$SERVICE_FILE" ]; then
-            service_disable || fail '禁用后台服务失败，程序和数据未删除'
-            rm -f "$SERVICE_FILE"
-        else
-            remove_owned_enable_links
-        fi
-        service_reload || fail '服务文件已移除，但重新加载失败；程序和数据保留，可重试'
-    fi
-    entry=$(printf "alias swol='sh \"%s/menu.sh\"' # Shell-WoL" "$ROOT")
-    if [ -n "$MENU_PROFILE" ] && [ -f "$MENU_PROFILE" ] && grep -Fqx "$entry" "$MENU_PROFILE"; then
-        before=$(checksum "$MENU_PROFILE")
-        STATE_TMP=$(mktemp "$MENU_PROFILE.shell-wol.XXXXXX")
-        cp -p "$MENU_PROFILE" "$STATE_TMP"
-        awk -v entry="$entry" '$0!=entry' "$MENU_PROFILE" >"$STATE_TMP"
-        [ "$(checksum "$MENU_PROFILE")" = "$before" ] || fail 'profile 在清理期间发生变化'
-        mv -f "$STATE_TMP" "$MENU_PROFILE"; STATE_TMP=
-    fi
-    # Record the detached service before deleting programs, making retries safe.
-    previous=$(state_value last_version)
-    if [ -z "$previous" ]; then previous=$(state_value version); fi
-    STATE_TMP=$(mktemp "$ROOT/.uninstall-state.XXXXXX")
-    printf 'schema=1\nversion=uninstalled\nservice=none\nservice_sha256=\nstatus=uninstalled\nlast_version=%s\n' "$previous" >"$STATE_TMP"
-    printf 'menu_profile=%s\nmenu_sha256=%s\n' "$MENU_PROFILE" "$MENU_SHA" >>"$STATE_TMP"
-    chmod 600 "$STATE_TMP"; mv -f "$STATE_TMP" "$STATE"; STATE_TMP=
-    if [ "$BOOT_MODE" = firewall ]; then
-        rm -f "$ROOT/boot.sh" "$ROOT/service/shell-wol.procd" "$ROOT/.autostart-disabled"
-        rmdir "$ROOT/service" 2>/dev/null || :
-    fi
-    rm -f "$ROOT/bin/shell-wol" "$ROOT/backup/shell-wol.previous"
-    if [ -n "$MENU_SHA" ]; then rm -f "$ROOT/menu.sh"; fi
-    if [ "$PURGE" = 1 ]; then
-        for name in config.yaml devices.yaml events.yaml credentials.yaml credentials.key service.log service.err.log; do rm -f "$DATA/$name"; done
-        rm -f "$STATE"
-    fi
-    rmdir "$DATA/.lock"; OWN_DATA_LOCK=0
-    if [ "$PURGE" = 1 ] || [ "$DATA_CREATED" = 1 ]; then rmdir "$DATA" 2>/dev/null || :; DATA_CREATED=0; fi
-    rmdir "$ROOT/bin" "$ROOT/backup" 2>/dev/null || :
-    say '程序及受管理后台服务已卸载。'
-    if [ "$PURGE" = 0 ]; then say "数据保留于 $DATA；重新安装时指定 --install-dir \"$ROOT\"。"; fi
-    remaining=$(find "$ROOT" ! -path "$ROOT" ! -path "$ROOT/.install-lock" -print) || fail '无法列出剩余文件，请检查目录'
-    if [ -n "$remaining" ]; then say '保留的文件：'; printf '%s\n' "$remaining"; fi
+    finish_uninstall "$ROOT" "$PURGE" "$BOOT_MODE" "$MENU_PROFILE" "$MENU_SHA" "$SERVICE" "$SERVICE_FILE" "$LAUNCH_DOMAIN" legacy
+
 }
 if [ "${SHELL_WOL_UNINSTALL_LIBRARY:-0}" != 1 ]; then main "$@"; fi

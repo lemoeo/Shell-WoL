@@ -122,7 +122,7 @@ class BootTests(unittest.TestCase):
             for p in sorted(self.f.template_dir.iterdir()) if p.name != 'SHA256SUMS'))
 
     def install(self, *args, mode='firewall', success=True):
-        prefix = '. "$1"; shift; BOOT_LOCK="$FIXTURE_SERVICE/boot.lock"; '
+        prefix = '. "$1"; UNINSTALL_SOURCE=$1; shift; BOOT_LOCK="$FIXTURE_SERVICE/boot.lock"; '
         prefix += 'menu_profile_path() { echo "$FIXTURE_SERVICE/profile"; }; '
         prefix += 'detect_firmware() { echo openwrt; }; '
         prefix += 'choose_service() { SERVICE=procd; SERVICE_FILE="$FIXTURE_SERVICE/shell-wol"; SERVICE_USER=; SERVICE_GROUP=; LAUNCH_DOMAIN=; }; '
@@ -131,7 +131,7 @@ class BootTests(unittest.TestCase):
                            '--service', '--boot-mode', mode, '--yes', *args, success=success)
 
     def uninstall(self, *args, success=True):
-        prefix = '. "$1"; shift; BOOT_LOCK="$FIXTURE_SERVICE/boot.lock"; '
+        prefix = '. "$1"; UNINSTALL_SOURCE=$1; shift; BOOT_LOCK="$FIXTURE_SERVICE/boot.lock"; '
         prefix += 'resolve_service() { SERVICE_FILE="$FIXTURE_SERVICE/shell-wol"; LAUNCH_DOMAIN=; }; '
         return self.invoke(prefix+'main "$@"', fixture.REPO/'scripts/uninstall.sh',
                            '--install-dir', str(self.root), '--yes', *args, success=success)
@@ -331,6 +331,21 @@ p.write_text(str(n));print(n)
         self.boot(success=False)
         self.assertFalse(self.unit.exists())
         self.assertFalse((self.service/'boot.lock').exists())
+
+    def test_vendor_running_success_does_not_skip_real_start(self):
+        # Old vendor rc.common may report running even without an instance.
+        self.f.env['REQUIRE_ACTIVE']='1';self.env['REQUIRE_ACTIVE']='1'
+        p=self.f.template_dir/'shell-wol.openwrt'
+        p.write_text(p.read_text().replace('running) [ "${STATUS_ERROR:-0}" != 1 ] || exit 2; [ -f "$folder/active" ];;',
+                                          'running) exit 0;;'))
+        manifest=self.f.template_dir/'SHA256SUMS'
+        manifest.write_text(''.join(hashlib.sha256(x.read_bytes()).hexdigest()+'  '+x.name+'\n'
+            for x in sorted(self.f.template_dir.iterdir()) if x.name!='SHA256SUMS'))
+        self.install();self.reset_etc()
+        count=self.starts()
+        self.boot()
+        self.assertTrue((self.service/'active').exists())
+        self.assertEqual(self.starts(),count+1)
 
     def test_uninstall_after_reset_detaches_before_stop_and_keeps_data(self):
         self.install(); self.reset_etc(); (self.service/'active').touch()

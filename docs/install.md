@@ -25,11 +25,11 @@ sh install.sh
 | 最新正式版本信息 | Release 的 `latest/download/VERSION` | 资产分支 `@assets/VERSION` |
 | 二进制及其 SHA256SUMS | Release 的 `download/<版本>/` | 固定资产标签 `@assets-<版本>/` |
 | 服务模板及其 SHA256SUMS | 源码 `<版本>/deploy/` | 源码 `@<版本>/deploy/` |
-| 终端菜单及其校验清单 | 源码 `<MENU_REF>/scripts/menu.sh`、`<MENU_REF>/deploy/SHA256SUMS` | 同一提交的 `@<MENU_REF>` 文件 |
+| 终端菜单及其校验清单 | 新程序使用同版本源码标签；旧程序使用 `MENU_REF` 兼容提交 | 同一引用的 `@<版本或提交>` 文件 |
 
 首次解析 latest 后，二进制与模板全部固定到同一版本，不会改用 main 或旧版模板。仅访问所选源，下载或校验失败直接停止；需要换源时重新执行并指定 `--source`。
 
-终端菜单和清单固定到安装器 `MENU_REF` 指定的同一个已存在提交，避免 CDN 的 main 分支缓存不同步。校验通过后安装为根目录的 `menu.sh`，通过 profile 别名 `swol` 进入。不需要新 Go Release 或额外标签；完整命令及权限说明见 [终端菜单](terminal-menu.md)。
+支持文件锁的新程序将菜单和清单固定到同一个程序版本标签；旧程序沿用安装器 `MENU_REF` 的兼容提交，两者均避免 CDN 的 main 分支缓存不同步。校验通过后安装为根目录的 `menu.sh`，通过 profile 别名 `swol` 进入。系统文件锁和 `token` 功能需要新 Go 二进制；不增加额外管理包标签。完整命令及权限说明见 [终端菜单](terminal-menu.md)。
 
 旧 Release 已上传的脚本和模板无需删除。**旧标签如果没有 `deploy/SHA256SUMS`，新安装器无法为该版本自动安装服务**；可使用原配套安装方式，或不加 `--service` 只安装程序并手动运行。已有受管理服务的升级会保留服务类型，因此也需要选择包含模板清单的新标签。不要移动旧标签来补文件；应提交文件并发布新版本。
 
@@ -176,8 +176,10 @@ sh install.sh --version v0.1.0 \
 # Linux systemd
 sudo journalctl -u shell-wol -n 30 --no-pager
 
-# OpenWrt
-logread -e shell-wol
+# 新版 OpenWrt/小米固件，无需 logread
+swol token
+# 或：/data/shell-wol/bin/shell-wol token --data-dir /data/shell-wol/data
+# 旧版仍使用 logread -e shell-wol
 
 # macOS 用户安装
 cat "$HOME/Library/Application Support/Shell-WoL/data/service.log"
@@ -186,7 +188,7 @@ cat "$HOME/Library/Application Support/Shell-WoL/data/service.log"
 sudo cat "/Library/Application Support/Shell-WoL/data/service.log"
 ```
 
-日志可能保留上次启动的旧令牌，应使用最近一次启动输出的令牌，不要公开日志中的令牌。也可先停止服务，再通过 `init --password-stdin` 设置密码；Linux systemd 使用 `sudo -u shell-wol`，macOS 系统安装使用 `sudo -u daemon`，用户安装使用当前用户，路由器通常使用 root。不要用错误账户生成仅该账户可读的 0600 配置文件。
+新程序优先使用 `token` 命令：它读取私有 `data/.setup-token`，核对当前服务锁及实例标识；已初始化则不显示历史令牌。日志仍可能保留旧令牌，不要公开令牌或启动日志。文件生命周期及权限见 [运行状态文件](runtime-state.md)。也可先停止服务，再通过 `init --password-stdin` 设置密码；Linux systemd 使用 `sudo -u shell-wol`，macOS 系统安装使用 `sudo -u daemon`，用户安装使用当前用户，路由器通常使用 root。不要用错误账户生成仅该账户可读的 0600 配置文件。
 
 路由器需检查 LAN/WAN 防火墙。桌面模式可直接运行 `serve`，局域网模式可加 `--listen 0.0.0.0:8080`。不要同时运行手动进程和使用同一数据目录的后台服务。
 
@@ -195,14 +197,14 @@ sudo cat "/Library/Application Support/Shell-WoL/data/service.log"
 再次运行安装器可升级；已有安装的服务类型会自动保留，不需要再次传 `--service`。
 
 - 下载、SHA256 和版本运行检查在替换程序前完成；服务模板根据同版本仓库中的 `deploy/SHA256SUMS` 验证摘要，和 Release 的二进制校验清单分开处理。
-- 升级前只读校验已有 YAML，停止本安装管理的服务，再检查运行锁。安装器不会删除 `data/.lock`。
+- 升级前只读校验已有 YAML，停止本安装管理的服务，再通过 Go 检查内核锁。文件 `data/.lock` 可以保留；旧版目录锁仍需确认无进程后人工迁移。
 - 程序替换后保留旧程序为 `backup/shell-wol.previous`，已有 YAML 不改写、不重置密码。
 - 启动服务后会实际请求配置地址的 `/api/session`，未初始化时也应正常响应；仅有进程或服务状态不足以通过就绪检查。
 - 启动失败会尝试恢复旧程序、服务文件、安装元数据和原有启用/运行状态，并明确报告恢复失败。数据不做跨版本迁移；将来若有格式变化，需另行制定迁移与数据备份流程。
 - 安装器拒绝覆盖不属于本安装的服务文件，以及摘要发生变化的用户定制服务文件。应备份后人工合并。
 - 目标非空且没有安装元数据时拒绝覆盖；老版手动安装需先停止服务、备份数据，选择新目录安装，再在服务停止时迁移 YAML。路径更换需人工迁移服务文件。
 - firewall 模式还备份和回滚本安装的 include、持久启动文件及禁用标记；发现其他未提交的 firewall 修改或同名 section 指向其他安装时停止，不会覆盖 ShellCrash 或其他 section。切换到 native 时同样清理和回滚本安装入口。
-- 异常退出遗留数据锁 `data/.lock` 或安装锁 `.install-lock` 时，需分别确认没有服务或安装进程后人工处理。持久启动操作使用 `/tmp/shell-wol-boot.lock` 与安装、卸载互斥；只清理自己创建的锁，不自动删除其他遗留锁。不会修改厂商 SSH、NVRAM 或端口规则。
+- 新版数据锁由系统自动释放，无需因 `data/.lock` 文件存在而人工清理。旧版目录锁的迁移及异常中断安装留下的 `.install-lock` 仍需确认进程及事务状态后处理。持久启动操作使用 `/tmp/shell-wol-boot.lock` 与安装、卸载互斥；只清理自己创建的锁，不自动删除其他遗留锁。不会修改厂商 SSH、NVRAM 或端口规则。
 
 firewall 安装使用 schema 2 元数据，旧版安装器/卸载器会拒绝处理，防止遗漏启动入口；请使用仓库最新的安装和卸载脚本。普通 native 安装继续使用 schema 1。
 
@@ -247,6 +249,7 @@ sudo sh uninstall.sh --install-dir /opt/shell-wol --purge
 | --- | --- | --- |
 | 受管理的服务文件及开机启动 | 移除 | 移除 |
 | `menu.sh` 和本安装的 `swol` 别名 | 移除 | 移除 |
+| 私有初始化令牌及本安装的运行锁文件 | 移除 | 移除 |
 | 本安装的 firewall include、`boot.sh`、持久 procd 副本及禁用标记 | 移除 | 移除 |
 | `bin/shell-wol`、`backup/shell-wol.previous` | 删除 | 删除 |
 | `data/config.yaml`、`devices.yaml`、`events.yaml` | 保留 | 删除 |
@@ -261,7 +264,7 @@ firewall 模式在停止服务前，先写入持久禁用标记并移除本安�
 
 卸载器不再比较服务文件与安装记录中的摘要。修正 WorkingDirectory 引号、添加注释或调整服务参数后，只要服务命令仍指向本安装的程序和数据目录，就可卸载；不需要修改或重算元数据中的 `service_sha256`。如果服务指向另一个安装目录，仍会拒绝处理。此调整仅适用于卸载，安装器升级时对定制服务文件的覆盖保护保持不变。
 
-卸载使用和安装器相同的 `.install-lock` 防止并发，并在确认没有已有运行锁后临时创建自己的数据锁，防止常规服务同时重启。只清理自己创建的锁。检测到手动运行进程、遗留运行锁、无法判断服务状态、服务指向其他安装目录或路径为符号链接时，会中止；请先人工确认，不要盲目删除锁。Linux 检查可读取的 `/proc` 可执行路径，macOS 使用 ps；执行期间不要在另一个终端绕过数据锁启动程序。
+卸载使用和安装器相同的 `.install-lock` 防止并发。新版程序通过 `lock -- 命令` 在整个同步数据清理阶段持有系统锁；兼容旧程序时仍使用目录锁。仅在停止服务、完成清理后移除本安装的运行文件。检测到手动运行进程、被占用的内核锁、遗留的旧版目录锁、无法判断服务状态、服务指向其他安装目录或路径为符号链接时，会中止；请先人工确认，不要盲目删除锁。Linux 检查可读取的 `/proc` 可执行路径，macOS 使用 ps；执行期间不要在另一个终端绕过数据锁启动程序。
 
 服务停止、禁用或重新加载失败时，不继续删除程序和数据；已经完成的服务操作可能保留。处理错误后可再次执行：原服务已停止、已卸载或文件已不存在且状态仍可确认时可继续；普通 native procd 安装的脚本缺失，或 firewall 安装连持久副本也不可用时，需先人工处理。脚本不删除系统服务账户，以保持保留数据的归属，并支持重新安装。
 
@@ -308,7 +311,7 @@ sh scripts/template-checksums.sh --check
 
 将模板与 `deploy/SHA256SUMS` 一起提交，再创建版本标签。Tests、Release 工作流和构建脚本都会检查该清单；摘要过期会导致检查失败。不要在 Release 工作流中自动覆盖仓库清单来绕过检查。
 
-该清单还包含 `scripts/menu.sh` 的摘要；菜单修改后运行同一个 `template-checksums.sh` 更新。先提交菜单和清单，再将安装器的 `MENU_REF` 更新为该提交的完整 SHA；不需要为菜单创建程序版本标签。
+该清单还包含 `scripts/menu.sh` 的摘要；菜单修改后运行同一个 `template-checksums.sh` 更新。新程序的对应版本标签应包含匹配的菜单；旧版本继续使用已固定的兼容菜单。系统文件锁和初始化令牌文件需要重新编译 Go，并通过新程序版本发布。
 
 ## Mac VNC 凭据
 

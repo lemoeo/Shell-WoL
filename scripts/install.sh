@@ -37,6 +37,8 @@ TRANSACTION=0
 OLD_BINARY=0
 OLD_STATE=0
 OLD_SERVICE=0
+OLD_SYSTEM_LOCK=0
+OLD_LOCK_FILE=0
 WAS_ACTIVE=0
 WAS_ENABLED=0
 SERVICE_CHANGED=0
@@ -416,9 +418,15 @@ run() {
         sleep 1
     done
     restore_service
-    if "$SERVICE_FILE" running >/dev/null 2>&1; then return 0
+    if "$SERVICE_FILE" running >/dev/null 2>&1; then
+        # Some vendor rc.common implementations return success unconditionally.
+        "$ROOT/bin/shell-wol" check --data-dir "$ROOT/data" --running >/dev/null 2>&1 && return 0
     else code=$?; [ "$code" = 1 ] || die '无法确认 procd 服务状态'; fi
-    [ ! -e "$ROOT/data/.lock" ] && [ ! -L "$ROOT/data/.lock" ] || die '数据运行锁仍存在；不会删除锁或重复启动'
+    if "$ROOT/bin/shell-wol" lock --help >/dev/null 2>&1; then
+        "$ROOT/bin/shell-wol" lock --data-dir "$ROOT/data" >/dev/null || die '数据目录正被占用或存在旧版目录锁'
+    else
+        [ ! -e "$ROOT/data/.lock" ] && [ ! -L "$ROOT/data/.lock" ] || die '数据运行锁仍存在；不会删除锁或重复启动'
+    fi
     "$ROOT/bin/shell-wol" check --data-dir "$ROOT/data" >/dev/null 2>&1 || die 'YAML 配置检查失败'
     allowed || return 0
     "$SERVICE_FILE" start || die 'procd 启动失败'
@@ -546,6 +554,13 @@ rollback() {
     fi
     if [ "$restore_boot_failed" = 1 ]; then touch "$ROOT/.autostart-disabled"; chmod 600 "$ROOT/.autostart-disabled"; fi
     BOOT_MODE=$PRIOR_BOOT_MODE
+    if [ "${NEW_SYSTEM_LOCK:-0}" = 1 ] && [ "$OLD_SYSTEM_LOCK" = 0 ] && [ "$OLD_LOCK_FILE" = 0 ] && [ -f "$DATA/.lock" ]; then
+        # Remove only a file introduced by this failed upgrade, under its lock.
+        "$TMP/$artifact" lock --data-dir "$DATA" -- sh -c '
+            [ ! -L "$1/.lock" ] && [ -f "$1/.lock" ] || exit 1
+            rm -f "$1/.setup-token" && rm -f "$1/.lock"
+        ' rollback-lock "$DATA" || say '警告：数据锁无法恢复为旧版格式，请先确认进程状态' >&2
+    fi
     if [ "$OLD_BINARY" = 1 ]; then
         cp "$TMP/old-binary" "$BIN/.shell-wol-restore" && chmod 755 "$BIN/.shell-wol-restore" && mv -f "$BIN/.shell-wol-restore" "$BIN/shell-wol" || say '警告：旧程序恢复失败' >&2
     else rm -f "$BIN/shell-wol"; fi
@@ -781,6 +796,12 @@ main() {
     verify_asset "$artifact"
     chmod 755 "$TMP/$artifact"
     [ "$("$TMP/$artifact" version)" = "$VERSION" ] || fail '二进制无法运行或版本不匹配'
+    NEW_SYSTEM_LOCK=0
+    if "$TMP/$artifact" lock --help >/dev/null 2>&1; then
+        NEW_SYSTEM_LOCK=1
+        # New Go features and their menu ship together in the normal release tag.
+        MENU_REF=$VERSION
+    fi
     if [ "$SERVICE" != none ]; then
         case "$SERVICE" in systemd) template=shell-wol.service ;; procd) template=shell-wol.openwrt ;; *) template=shell-wol.plist ;; esac
         # Templates and their manifest must come from the binary's exact tag.
@@ -824,7 +845,10 @@ main() {
     mkdir -p "$BIN" "$DATA" "$ROOT/backup"
     chmod 755 "$ROOT" "$BIN"; chmod 700 "$DATA" "$ROOT/backup"
     if [ -f "$ROOT/.shell-wol-install" ]; then cp "$ROOT/.shell-wol-install" "$TMP/old-state"; OLD_STATE=1; fi
-    if [ -f "$BIN/shell-wol" ]; then cp "$BIN/shell-wol" "$TMP/old-binary"; OLD_BINARY=1; fi
+    if [ -f "$BIN/shell-wol" ]; then
+        cp "$BIN/shell-wol" "$TMP/old-binary"; OLD_BINARY=1
+        if "$TMP/old-binary" lock --help >/dev/null 2>&1; then OLD_SYSTEM_LOCK=1; fi
+    fi
     # Read-only application validation precedes any service restoration or stop.
     if [ -f "$DATA/config.yaml" ]; then "$TMP/$artifact" check --data-dir "$DATA" >/dev/null || fail '现有 YAML 配置检查失败'; fi
     TRANSACTION=1
@@ -847,11 +871,26 @@ main() {
         while [ "$WAS_ACTIVE" = 1 ] && [ -d "$DATA/.lock" ] && [ "$attempts" -lt 10 ]; do sleep 1; attempts=$((attempts+1)); done
         [ ! -d "$DATA/.lock" ] || fail '数据目录存在运行锁；请确认进程状态并人工处理，安装器不会删除锁'
     fi
+    if [ -f "$DATA/.lock" ] && [ ! -L "$DATA/.lock" ]; then OLD_LOCK_FILE=1; fi
+    if [ "$NEW_SYSTEM_LOCK" = 1 ]; then
+        attempts=0
+        while ! "$TMP/$artifact" lock --data-dir "$DATA" >"$TMP/lock-status" 2>&1; do
+            if [ "$WAS_ACTIVE" = 1 ] && [ "$attempts" -lt 10 ]; then
+                attempts=$((attempts+1)); sleep 1
+            else cat "$TMP/lock-status" >&2; fail '数据锁不可用；旧版遗留目录需确认无进程后清理一次'; fi
+        done
+    elif [ -e "$DATA/.lock" ] || [ -L "$DATA/.lock" ]; then
+        fail '目标旧版本不支持当前文件锁格式；请先停服并使用兼容版本'
+    fi
     if [ "$OLD_BINARY" = 1 ]; then cp "$TMP/old-binary" "$ROOT/backup/shell-wol.previous"; chmod 700 "$ROOT/backup/shell-wol.previous"; fi
     cp "$TMP/$artifact" "$BIN/.shell-wol-new"; chmod 755 "$BIN/.shell-wol-new"; mv -f "$BIN/.shell-wol-new" "$BIN/shell-wol"
     if [ ! -f "$DATA/config.yaml" ] && [ ! -f "$DATA/devices.yaml" ]; then
-        "$BIN/shell-wol" init --data-dir "$DATA" >/dev/null || fail '初始化数据失败'
-        if [ "$FIRMWARE" = xiaomi ] || [ "$FIRMWARE" = openwrt ]; then sed 's/^log_limit:.*/log_limit: 0/' "$DATA/config.yaml" >"$TMP/config"; cat "$TMP/config" >"$DATA/config.yaml"; fi
+        if [ "$NEW_SYSTEM_LOCK" = 1 ] && { [ "$FIRMWARE" = xiaomi ] || [ "$FIRMWARE" = openwrt ]; }; then
+            "$BIN/shell-wol" init --data-dir "$DATA" --log-limit 0 >/dev/null || fail '初始化数据失败'
+        else
+            "$BIN/shell-wol" init --data-dir "$DATA" >/dev/null || fail '初始化数据失败'
+            if [ "$FIRMWARE" = xiaomi ] || [ "$FIRMWARE" = openwrt ]; then sed 's/^log_limit:.*/log_limit: 0/' "$DATA/config.yaml" >"$TMP/config"; cat "$TMP/config" >"$DATA/config.yaml"; fi
+        fi
     fi
     "$BIN/shell-wol" check --data-dir "$DATA" >/dev/null || fail '安装后的配置检查失败'
     service_hash=
@@ -906,7 +945,9 @@ main() {
         say '尚未设置管理员密码：可在浏览器使用本次启动的初始化令牌完成设置。'
         case "$SERVICE" in
             systemd) say '查看令牌：sudo journalctl -u shell-wol -n 30 --no-pager' ;;
-            procd) say '查看令牌：logread -e shell-wol' ;;
+            procd)
+                if [ "$NEW_SYSTEM_LOCK" = 1 ]; then say "查看令牌：swol token 或 \"$BIN/shell-wol\" token --data-dir \"$DATA\""
+                else say '查看令牌：logread -e shell-wol（新版本可通过 swol token 查看）'; fi ;;
             launchd-user|launchd-system) say "查看令牌：$DATA/service.log（系统安装使用 sudo 读取）" ;;
             none) say '手动启动 serve 后，在启动终端查看令牌。' ;;
         esac

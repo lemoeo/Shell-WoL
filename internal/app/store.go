@@ -17,8 +17,15 @@ type deviceFile struct {
 type eventFile struct {
 	Events []Event `yaml:"events"`
 }
+
+var ErrStoreClosed = errors.New("数据存储已关闭")
+
 type Store struct {
 	mu                    sync.RWMutex
+	lock                  *DataLock
+	closeOnce             sync.Once
+	closeErr              error
+	closed                bool
 	dir                   string
 	config                Config
 	devices               []Device
@@ -30,18 +37,20 @@ func OpenStore(dir string) (s *Store, err error) {
 	if err = os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
-	// A lock directory is portable, including Windows and embedded Linux.
-	lockPath := filepath.Join(dir, ".lock")
-	if err = os.Mkdir(lockPath, 0700); err != nil {
-		return nil, fmt.Errorf("数据目录已被占用（异常退出后确认无进程再删除 %s）: %w", lockPath, err)
+	lock, err := AcquireDataLock(dir)
+	if err != nil {
+		return nil, err
 	}
-	s = &Store{dir: dir, config: DefaultConfig(), devices: []Device{}, events: []Event{}}
+	s = &Store{dir: dir, lock: lock, config: DefaultConfig(), devices: []Device{}, events: []Event{}}
 	opened := s
 	defer func() {
 		if err != nil {
 			opened.Close()
 		}
 	}()
+	if err = s.clearSetupToken(); err != nil {
+		return nil, err
+	}
 	configPath := filepath.Join(dir, "config.yaml")
 	s.configDoc, err = readYAML(configPath, &s.config)
 	if errors.Is(err, os.ErrNotExist) {
@@ -96,7 +105,15 @@ func OpenStore(dir string) (s *Store, err error) {
 	err = nil
 	return s, nil
 }
-func (s *Store) Close() error { return os.Remove(filepath.Join(s.dir, ".lock")) }
+func (s *Store) Close() error {
+	s.closeOnce.Do(func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.closed = true
+		s.closeErr = errors.Join(s.clearSetupToken(), s.lock.Close())
+	})
+	return s.closeErr
+}
 func (s *Store) Config() Config {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -142,6 +159,9 @@ func (s *Store) SaveDeviceCredentials(d Device, create bool, password []byte, cl
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return ErrStoreClosed
+	}
 	list := append([]Device{}, s.devices...)
 	index := -1
 	for i, v := range list {
@@ -208,6 +228,9 @@ func (s *Store) SaveDeviceCredentials(d Device, create bool, password []byte, cl
 func (s *Store) DeleteDevice(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return ErrStoreClosed
+	}
 	for i, d := range s.devices {
 		if d.ID == id {
 			list := append([]Device{}, s.devices[:i]...)
@@ -248,6 +271,9 @@ func (s *Store) saveDevices(list []Device) error {
 func (s *Store) SaveConfig(c Config) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return ErrStoreClosed
+	}
 	c.PasswordHash = s.config.PasswordHash
 	// Proxy trust is an administrator-only YAML setting, absent from the web API.
 	c.TrustedProxies = append([]string(nil), s.config.TrustedProxies...)
@@ -274,9 +300,16 @@ func (s *Store) SetPassword(password string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return ErrStoreClosed
+	}
 	c := s.config
 	c.PasswordHash = string(hash)
-	return s.saveConfig(c)
+	if err := s.saveConfig(c); err != nil {
+		return err
+	}
+	s.passwordTokenCleanup()
+	return nil
 }
 func (s *Store) Events() []Event {
 	s.mu.RLock()
@@ -291,6 +324,9 @@ func (s *Store) Events() []Event {
 func (s *Store) Record(e Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return ErrStoreClosed
+	}
 	limit := s.config.LogLimit
 	if limit == 0 {
 		return nil

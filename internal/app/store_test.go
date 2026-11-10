@@ -84,9 +84,11 @@ func TestBadYAMLReleasesLock(t *testing.T) {
 	if _, e := OpenStore(dir); e == nil {
 		t.Fatal("accepted invalid YAML")
 	}
-	if _, e := os.Stat(filepath.Join(dir, ".lock")); !os.IsNotExist(e) {
-		t.Fatal("failed open left lock")
+	lock, e := AcquireDataLock(dir)
+	if e != nil {
+		t.Fatal("failed open left held lock:", e)
 	}
+	lock.Close()
 	for _, b := range []string{"a: 1\na: 2", "x: &x [*x]", "a: 1\n---\nb: 2"} {
 		if _, e := parseYAML([]byte(b)); e == nil {
 			t.Fatalf("accepted %s", b)

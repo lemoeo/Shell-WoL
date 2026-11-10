@@ -37,6 +37,7 @@ fi
 [ ! -f "$data/invalid" ] || exit 5
 if [ "$required" = 1 ]; then grep -q 'password_hash: ready' "$data/config.yaml" || exit 6; fi
 if [ "$running" = 1 ] && [ "${FAIL_RUNNING_VERSION:-}" = "$version" ]; then exit 7; fi
+if [ "$running" = 1 ] && [ "${REQUIRE_ACTIVE:-0}" = 1 ] && [ ! -f "$FIXTURE_SERVICE/active" ]; then exit 7; fi
 '''
 CURL = r'''#!/usr/bin/env python3
 import json, os, pathlib, shutil, sys
@@ -125,6 +126,11 @@ class InstallerTests(unittest.TestCase):
         shutil.copyfile(REPO/'scripts/menu.sh',self.menu_dir/'menu.sh')
         manifest=self.menu_dir.parent/'deploy/SHA256SUMS';manifest.parent.mkdir(parents=True,exist_ok=True)
         manifest.write_text(hashlib.sha256((self.menu_dir/'menu.sh').read_bytes()).hexdigest()+'  menu.sh\n')
+        # New Go releases carry the matching menu under the same source tag.
+        tagged=self.base/'repository'/version/'scripts';tagged.mkdir(parents=True,exist_ok=True)
+        shutil.copyfile(REPO/'scripts/menu.sh',tagged/'menu.sh')
+        with (self.template_dir/'SHA256SUMS').open('a') as f:
+            f.write(hashlib.sha256((tagged/'menu.sh').read_bytes()).hexdigest()+'  menu.sh\n')
         self.manifest()
     def manifest(self):
         (self.assets/'SHA256SUMS').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in sorted(self.assets.glob('shell-wol-*'))))

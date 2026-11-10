@@ -84,7 +84,11 @@ start_service() {
         "$BIN" check --data-dir "$DATA" --running >/dev/null 2>&1 && { printf '服务已在运行。\n'; return 0; }
     else
         code=$?; [ "$code" = 1 ] || { error '无法确认进程状态'; return 1; }
-        [ ! -e "$DATA/.lock" ] && [ ! -L "$DATA/.lock" ] || { error '数据运行锁存在，请先确认手动进程或遗留锁'; return 1; }
+        if "$BIN" lock --help >/dev/null 2>&1; then
+            "$BIN" lock --data-dir "$DATA" || return 1
+        else
+            [ ! -e "$DATA/.lock" ] && [ ! -L "$DATA/.lock" ] || { error '旧版数据运行锁存在，请先确认进程或升级程序'; return 1; }
+        fi
         service_command start || return 1
     fi
     attempts=0
@@ -124,15 +128,18 @@ main() {
     setup || return 1
     case "${1:-menu}" in
         status) status; return $? ;;
+        token)
+            "$BIN" token --help >/dev/null 2>&1 || { error '当前程序不支持 token 命令，请升级 Go 程序'; return 1; }
+            "$BIN" token --data-dir "$DATA"; return $? ;;
         start|stop|restart) control "$1"; return $? ;;
         menu) ;;
-        *) error '用法：swol [status|start|restart|stop]'; return 2 ;;
+        *) error '用法：swol [status|start|restart|stop|token]'; return 2 ;;
     esac
     [ -t 0 ] && [ -t 1 ] || { error '交互菜单需要终端，可使用 swol status'; return 2; }
     while :; do
         printf '\n----------------------------------------\n'
         status || :
-        printf '\n1. 启动服务\n2. 重启服务\n3. 停止服务\n4. 刷新状态\n0. 退出\n请选择：'
+        printf '\n1. 启动服务\n2. 重启服务\n3. 停止服务\n4. 刷新状态\n5. 查看初始化令牌\n0. 退出\n请选择：'
         IFS= read -r choice || return 0
         case "$choice" in
             0|'') return 0 ;;
@@ -141,6 +148,7 @@ main() {
                 # A child releases its operation lock before returning to the menu.
                 sh "$ROOT/menu.sh" "$action" || : ;;
             4) continue ;;
+            5) sh "$ROOT/menu.sh" token || : ;;
             *) printf '无效选择。\n' ;;
         esac
         printf '按回车返回……'; IFS= read -r pause || return 0

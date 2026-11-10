@@ -118,10 +118,10 @@ logread -e shell-wol
 /etc/init.d/shell-wol stop
 sed -i 's/^listen:.*/listen: 0.0.0.0:8080/' /etc/shell-wol/data/config.yaml
 /etc/init.d/shell-wol start
-logread -e shell-wol
+swol token  # 新版无需 logread
 ```
 
-使用最近一次启动日志中的初始化令牌，在浏览器设置管理员密码，再登录。密码须为 12–72 字节；令牌不通过网页返回，重启后旧令牌失效。也可选择停止服务后通过 `init --password-stdin` 设置密码，但不是启动的前置条件。
+新程序使用 `swol token` 或 `shell-wol token --data-dir PATH` 读取当前服务令牌；菜单第 5 项也可查看，不依赖 logread。旧程序从最近启动日志取令牌。在浏览器设置管理员密码后再登录。密码须为 12–72 字节；令牌不通过网页返回，重启后旧令牌失效。也可选择停止服务后通过 `init --password-stdin` 设置密码，但不是启动的前置条件。
 
 从同一 LAN 的电脑或手机访问 `http://路由器LAN地址:8080`。若端口已占用，更换配置中的端口。确保防火墙仅允许可信 LAN 访问，不能假设二次开发固件具有 OpenWrt 的默认规则；无需公网端口映射。
 
@@ -133,7 +133,7 @@ logread -e shell-wol
 
 自动服务要求 `/etc/rc.common`、procd 库且 PID 1 为 procd。没有该能力的厂商固件应按实际服务机制适配；firewall include 仅用于恢复已有 procd 能力，不能替代 procd。
 
-服务管理使用 `/etc/init.d/shell-wol stop` 或 `/etc/init.d/shell-wol restart`。异常退出留下 `data/.lock` 时，先停止服务并确认无进程使用该目录，再人工删除空锁目录。不要在进程运行期间删除锁。
+服务管理使用 `/etc/init.d/shell-wol stop` 或 `/etc/init.d/shell-wol restart`。新程序的 `data/.lock` 是普通文件，实际锁在进程退出或设备重启后自动释放，不要因文件仍在就删除它。旧程序的空 `.lock/` 目录需停服、确认无进程后迁移一次，见 [运行状态文件](runtime-state.md)。
 
 ## 5. 升级与旧目录迁移
 
